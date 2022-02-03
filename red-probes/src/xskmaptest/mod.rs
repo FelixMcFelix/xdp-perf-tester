@@ -1,4 +1,3 @@
-
 use cty::*;
 
 // This is where you should define the types shared by the kernel and user
@@ -30,4 +29,3 @@ pub const TX_PERCENT: u32 = if let Some(ct) = option_env!("XPP_TEST_TX_RATE") {
 } else {
 	0
 };
-
