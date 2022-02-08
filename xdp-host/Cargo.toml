@@ -1,0 +1,17 @@
+[package]
+name = "xdp-perf-tester"
+authors = ["Kyle Simpson"]
+email = "kyleandrew.simpson@gmail.com"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+flume = "0.10"
+libbpf-rs = "0.16"
+nix = "0.23"
+pnet = "0.29"
+protocol = { path = "../protocol" }
+sudo = "0.6"
+xsk-rs = { version = "0.3", git = "https://github.com/FelixMcFelix/xsk-rs/", branch = "mut-access" }

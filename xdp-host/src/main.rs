@@ -1,5 +1,7 @@
+use flume::{Receiver, Sender};
 use libbpf_rs::{Link, MapFlags, Object, ObjectBuilder};
 use pnet::packet::ethernet::MutableEthernetPacket;
+use protocol::messages::*;
 use std::{
 	convert::TryInto,
 	error::Error,
@@ -21,60 +23,48 @@ use xsk_rs::{
 const IFACE: &str = "eno1";
 const TABLE: &str = "xsks_map";
 
-#[allow(dead_code)]
-enum EbpfTest {
-	CKern,
-	RKern {
-		n_cores: Option<usize>,
-		n_ops: Option<usize>,
-		tx_chance: Option<f64>,
-	},
-}
+fn build_ebpf(request: &EbpfProg) -> IoResult<UserProgramNeeds> {
+	use EbpfProg::*;
 
-impl EbpfTest {
-	fn build(&self) -> IoResult<UserProgramNeeds> {
-		use EbpfTest::*;
+	match request {
+		CKern => Ok(UserProgramNeeds {
+			program: "xskmaptest.elf".into(),
+			handler: "xdp_sock_prog".into(),
+			n_sks: 2,
+		}),
+		RustKern {
+			n_cores,
+			n_ops,
+			tx_chance,
+		} => {
+			let mut cmd = Command::new("/home/netlab/gits/redbpf/target/release/cargo-bpf");
 
-		match self {
-			CKern => Ok(UserProgramNeeds {
-				program: "xskmaptest.elf".into(),
-				handler: "xdp_sock_prog".into(),
-				n_sks: 2,
-			}),
-			RKern {
-				n_cores,
-				n_ops,
-				tx_chance,
-			} => {
-				let mut cmd = Command::new("/home/netlab/gits/redbpf/target/release/cargo-bpf");
+			cmd.current_dir("red-probes/")
+				.args(["bpf", "build", "--target-dir=../target"]);
 
-				cmd.current_dir("red-probes/")
-					.args(["bpf", "build", "--target-dir=../target"]);
+			if let Some(n_cores) = n_cores {
+				cmd.env("XPP_TEST_CORES", n_cores.to_string());
+			}
 
-				if let Some(n_cores) = n_cores {
-					cmd.env("XPP_TEST_CORES", n_cores.to_string());
+			if let Some(n_ops) = n_ops {
+				cmd.env("XPP_TEST_OPS", n_ops.to_string());
+			}
+
+			if let Some(tx_chance) = tx_chance {
+				let int_chance = tx_chance.clamp(0.0, 1.0) * (u32::MAX as f64);
+				cmd.env("XPP_TEST_TX_RATE", (int_chance as u32).to_string());
+			}
+
+			cmd.output().map(|d| {
+				println!("{:#?}", d);
+
+				UserProgramNeeds {
+					program: "./target/bpf/programs/xskmaptest/xskmaptest.elf".into(),
+					handler: "outer_xdp_sock_prog".into(),
+					n_sks: n_cores.unwrap_or(1) as usize,
 				}
-
-				if let Some(n_ops) = n_ops {
-					cmd.env("XPP_TEST_OPS", n_ops.to_string());
-				}
-
-				if let Some(tx_chance) = tx_chance {
-					let int_chance = tx_chance.clamp(0.0, 1.0) * (u32::MAX as f64);
-					cmd.env("XPP_TEST_TX_RATE", (int_chance as u32).to_string());
-				}
-
-				cmd.output().map(|d| {
-					println!("{:#?}", d);
-
-					UserProgramNeeds {
-						program: "./target/bpf/programs/xskmaptest/xskmaptest.elf".into(),
-						handler: "outer_xdp_sock_prog".into(),
-						n_sks: n_cores.unwrap_or(1),
-					}
-				})
-			},
-		}
+			})
+		},
 	}
 }
 
@@ -111,27 +101,58 @@ impl UserProgramNeeds {
 
 fn main() -> Result<(), Box<dyn Error>> {
 	sudo::with_env(&["CARGO_", "PATH"])?;
-	/*// Create a UMEM for dev1 with 32 frames, whose sizes are
-	// specified via the `UmemConfig` instance.
-	let (dev1_umem, mut dev1_descs) =
-		Umem::new(UmemConfig::default(), 32.try_into().unwrap(), false)
-			.expect("failed to create UMEM");
 
-	// Bind an AF_XDP socket to the interface named `xsk_dev1`, on
-	// queue 0.
-	let (mut dev1_tx_q, _dev1_rx_q, _dev1_fq_and_cq) = Socket::new(
-		SocketConfig::default(),
-		&dev1_umem,
-		&"xsk_dev1".parse().unwrap(),
-		0,
-	)
-	.expect("failed to create dev1 socket");*/
+	let (tx, rx) = protocol::host::host_server(protocol::DEFAULT_PORT);
+	let mut prog = None;
 
-	// Create a UMEM for dev2. Another option is to use the same UMEM
-	// as dev1 - to do that we'd just pass `dev1_umem` to the
-	// `Socket::new` call. In this case the UMEM would be shared, and
-	// so `dev1_descs` could be used in either context, but each
-	// socket would have its own completion queue and fill queue.
+	for msg in rx.iter() {
+		use ClientToHost::*;
+
+		match msg {
+			BpfBuildInstall(params) => {
+				let (kill_tx, kill_rx) = flume::bounded(1);
+				let (live_tx, live_rx) = flume::bounded(1);
+				let handle = std::thread::spawn(move || {
+					run_ebpf(params, kill_rx, live_tx);
+				});
+
+				prog = Some((handle, kill_tx));
+
+				live_rx.recv()?;
+
+				let _ = tx.send(HostToClient::Success);
+			},
+			BpfClose => {
+				let take = if let Some((handle, kill_tx)) = &prog {
+					let _ = kill_tx.send(());
+
+					true
+				} else {
+					let _ = tx.send(HostToClient::Fail(FailReason::Generic(
+						"No live experiment to kill.".to_string(),
+					)));
+
+					false
+				};
+
+				if take {
+					let (handle, _) = prog.take().unwrap();
+
+					handle.join();
+					let _ = tx.send(HostToClient::Success);
+				}
+			},
+		}
+	}
+
+	Ok(())
+}
+
+fn run_ebpf(
+	req: EbpfProg,
+	kill_rx: Receiver<()>,
+	live_tx: Sender<()>,
+) -> Result<(), Box<dyn Error>> {
 	let (umem, descs) = Umem::new(UmemConfig::default(), 1024.try_into().unwrap(), false)
 		.expect("failed to create UMEM");
 
@@ -143,13 +164,13 @@ fn main() -> Result<(), Box<dyn Error>> {
 		.libbpf_flags(LibbpfFlags::XSK_LIBBPF_FLAGS_INHIBIT_PROG_LOAD)
 		.build();
 
-	let test_details = EbpfTest::RKern {
-		n_cores: Some(8),
-		n_ops: Some(128),
-		tx_chance: Some(0.0),
-	};
+	// let test_details = EbpfTest::RKern {
+	// 	n_cores: Some(8),
+	// 	n_ops: Some(128),
+	// 	tx_chance: Some(0.0),
+	// };
 
-	let prog_details = test_details.build().unwrap();
+	let prog_details = build_ebpf(&req).unwrap();
 
 	let (mut prog, _link) = prog_details.load(IFACE);
 
@@ -207,16 +228,60 @@ fn main() -> Result<(), Box<dyn Error>> {
 		let _ = std::thread::spawn(move || pkt_loop(i, tx_q, rx_q, my_descs, my_umem));
 	}
 
-	fq_cq_mediator(cq, fq, descs);
+	let _ = live_tx.send(());
 
-	panic!("no matching packets received")
+	fq_cq_mediator(cq, fq, descs, kill_rx);
+
+	Ok(())
 }
 
-fn fq_cq_mediator(mut cq: CompQueue, mut fq: FillQueue, mut descs: Vec<FrameDesc>) {
+fn fq_cq_mediator(
+	mut cq: CompQueue,
+	mut fq: FillQueue,
+	mut descs: Vec<FrameDesc>,
+	kill_rx: Receiver<()>,
+) {
 	loop {
+		match kill_rx.try_recv() {
+			Ok(()) | Err(flume::TryRecvError::Disconnected) => break,
+			_ => {},
+		}
+
 		unsafe {
 			let pkts_to_send = cq.consume(&mut descs);
 			fq.produce(&descs[..pkts_to_send]);
+		}
+	}
+}
+
+fn pkt_loop_single(
+	idx: usize,
+	mut tx: TxQueue,
+	mut rx: RxQueue,
+	mut descs: Vec<FrameDesc>,
+	umem: Umem,
+) {
+	loop {
+		let pkts_recvd = unsafe { rx.poll_and_consume(&mut descs, 100).unwrap() };
+
+		// TODO: make this do the send per-batch?
+		for recv_desc in descs.iter_mut().take(pkts_recvd) {
+			let mut data = unsafe { umem.data_mut(recv_desc) };
+			let body = data.contents_mut();
+
+			{
+				if let Some(mut ether) = MutableEthernetPacket::new(body) {
+					println!("thread {} swapping: {:#?}", idx, ether);
+
+					let old_src = ether.get_source();
+					let old_dst = ether.get_destination();
+
+					ether.set_source(old_dst);
+					ether.set_destination(old_src);
+				}
+			}
+
+			unsafe { tx.produce_one_and_wakeup(recv_desc).unwrap() };
 		}
 	}
 }
@@ -241,8 +306,8 @@ fn pkt_loop(idx: usize, mut tx: TxQueue, mut rx: RxQueue, mut descs: Vec<FrameDe
 					ether.set_destination(old_src);
 				}
 			}
-
-			unsafe { tx.produce_one_and_wakeup(recv_desc).unwrap() };
 		}
+
+		unsafe { tx.produce_and_wakeup(&descs[..pkts_recvd]).unwrap() };
 	}
 }
