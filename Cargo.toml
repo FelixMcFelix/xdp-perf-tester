@@ -3,5 +3,6 @@
 members = [
 	"pkt-tester",
 	"protocol",
+	"red-probes",
 	"xdp-host",
 ]

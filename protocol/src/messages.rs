@@ -20,7 +20,7 @@ pub enum FailReason {
 	Generic(String),
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum EbpfProg {
 	CKern,
 	RustKern {

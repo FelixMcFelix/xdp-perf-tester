@@ -26,6 +26,8 @@ const TABLE: &str = "xsks_map";
 fn build_ebpf(request: &EbpfProg) -> IoResult<UserProgramNeeds> {
 	use EbpfProg::*;
 
+	println!("Building prog {:?}", request);
+
 	match request {
 		CKern => Ok(UserProgramNeeds {
 			program: "xskmaptest.elf".into(),

@@ -9,7 +9,10 @@ use std::{
 		Arc,
 	},
 };
-use tungstenite::error::Error as WsError;
+use tungstenite::{
+	error::Error as WsError,
+	handshake::HandshakeError as HsError,
+};
 
 pub fn host_server(port: u16) -> (Sender<HostToClient>, Receiver<ClientToHost>) {
 	let (tx_h2c, rx_h2c) = flume::unbounded();
@@ -39,7 +42,15 @@ fn host_server_inner(port: u16, tx: Sender<ClientToHost>, rx: Receiver<HostToCli
 
 			std::thread::spawn(move || {
 				eprintln!("WS Handler spawned.");
-				let mut websocket = tungstenite::accept(stream).unwrap();
+				let mut o_websocket = tungstenite::accept(stream);
+
+				let mut websocket = loop {
+					match o_websocket {
+						Ok(x) => break x,
+						Err(HsError::Interrupted(x)) => o_websocket = x.handshake(),
+						_ => panic!("Failed to WS."),
+					}
+				};
 
 				let was_busy = l_busy.fetch_or(true, Ordering::Relaxed);
 
