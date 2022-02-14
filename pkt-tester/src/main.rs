@@ -63,7 +63,7 @@ fn main() -> AnyRes<()> {
 
 	time_pkts(channel, mac.octets());
 
-	// wipe_target()
+	wipe_target();
 
 	Ok(())
 }
@@ -71,7 +71,7 @@ fn main() -> AnyRes<()> {
 fn time_pkts(chan: Channel, src_mac: [u8; 6]) {
 	// let dst_mac = [0xbb,0xbb,0xbb,0xbb,0xbb,0xbb];
 	let dst_mac = [0xff, 0xff, 0xff, 0xff, 0xff, 0xff];
-	let n_pkts = 100_000;
+	let n_pkts = 10_000;
 
 	let (mut pkt_tx, mut pkt_rx) = match chan {
 		Channel::Ethernet(tx, rx) => (tx, rx),
