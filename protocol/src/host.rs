@@ -9,10 +9,7 @@ use std::{
 		Arc,
 	},
 };
-use tungstenite::{
-	error::Error as WsError,
-	handshake::HandshakeError as HsError,
-};
+use tungstenite::{error::Error as WsError, handshake::HandshakeError as HsError};
 
 pub fn host_server(port: u16) -> (Sender<HostToClient>, Receiver<ClientToHost>) {
 	let (tx_h2c, rx_h2c) = flume::unbounded();
@@ -59,6 +56,7 @@ fn host_server_inner(port: u16, tx: Sender<ClientToHost>, rx: Receiver<HostToCli
 					let _ = websocket.write_message(for_ws(&HostToClient::Fail(FailReason::Busy)));
 					// Close Conn.
 					let _ = websocket.close(None);
+					eprintln!("Bzzy");
 					return;
 				}
 

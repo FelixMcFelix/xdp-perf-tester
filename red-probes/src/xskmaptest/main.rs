@@ -27,9 +27,16 @@ fn xdp_sock_prog(ctx: XdpContext) -> XdpResult {
 		black_box(1 + i);
 	}
 
-    if TX_PERCENT == u32::MAX {
-        Ok(XdpAction::Tx)
-    } else if TX_PERCENT == 0 || bpf_get_prandom_u32() > TX_PERCENT {
+	if let Ok(my_iphdr) = ctx.ip() {
+		unsafe {
+			let my_iphdr = &mut *(my_iphdr as *mut iphdr);
+			my_iphdr.ttl -= 1;
+		}
+	}
+
+	if TX_PERCENT == u32::MAX {
+		Ok(XdpAction::Tx)
+	} else if TX_PERCENT == 0 || bpf_get_prandom_u32() < TX_PERCENT {
 		Ok(unsafe {
 			xsks_map
 				.redirect(target)

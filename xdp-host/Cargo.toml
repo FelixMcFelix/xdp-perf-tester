@@ -8,6 +8,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+bus = "2"
 flume = "0.10"
 libbpf-rs = "0.16"
 nix = "0.23"

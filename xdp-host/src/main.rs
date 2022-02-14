@@ -1,3 +1,4 @@
+use bus::{Bus, BusReader};
 use flume::{Receiver, Sender};
 use libbpf_rs::{Link, MapFlags, Object, ObjectBuilder};
 use pnet::packet::ethernet::MutableEthernetPacket;
@@ -204,6 +205,8 @@ fn run_ebpf(
 		fq.produce(&descs);
 	}
 
+	let mut bus = Bus::new(1);
+
 	for (i, (tx_q, rx_q)) in sockets.drain(..).enumerate() {
 		println!(
 			"Inserting FD {} into map: {}[{}]",
@@ -226,13 +229,14 @@ fn run_ebpf(
 
 		let my_descs = descs.clone();
 		let my_umem = umem.clone();
+		let my_bus = bus.add_rx();
 
-		let _ = std::thread::spawn(move || pkt_loop(i, tx_q, rx_q, my_descs, my_umem));
+		let _ = std::thread::spawn(move || pkt_loop(i, tx_q, rx_q, my_descs, my_umem, my_bus));
 	}
 
 	let _ = live_tx.send(());
 
-	fq_cq_mediator(cq, fq, descs, kill_rx);
+	fq_cq_mediator(cq, fq, descs, kill_rx, bus);
 
 	Ok(())
 }
@@ -242,6 +246,7 @@ fn fq_cq_mediator(
 	mut fq: FillQueue,
 	mut descs: Vec<FrameDesc>,
 	kill_rx: Receiver<()>,
+	mut bus: Bus<()>,
 ) {
 	loop {
 		match kill_rx.try_recv() {
@@ -254,6 +259,10 @@ fn fq_cq_mediator(
 			fq.produce(&descs[..pkts_to_send]);
 		}
 	}
+
+	bus.broadcast(());
+
+	eprintln!("Mediator dropped.");
 }
 
 fn pkt_loop_single(
@@ -273,7 +282,7 @@ fn pkt_loop_single(
 
 			{
 				if let Some(mut ether) = MutableEthernetPacket::new(body) {
-					println!("thread {} swapping: {:#?}", idx, ether);
+					// println!("thread {} swapping: {:#?}", idx, ether);
 
 					let old_src = ether.get_source();
 					let old_dst = ether.get_destination();
@@ -288,8 +297,22 @@ fn pkt_loop_single(
 	}
 }
 
-fn pkt_loop(idx: usize, mut tx: TxQueue, mut rx: RxQueue, mut descs: Vec<FrameDesc>, umem: Umem) {
+fn pkt_loop(
+	idx: usize,
+	mut tx: TxQueue,
+	mut rx: RxQueue,
+	mut descs: Vec<FrameDesc>,
+	umem: Umem,
+	mut kill_rx: BusReader<()>,
+) {
+	eprintln!("Thread {idx} entering.");
+
 	loop {
+		match kill_rx.try_recv() {
+			Ok(()) | Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+			_ => {},
+		}
+
 		let pkts_recvd = unsafe { rx.poll_and_consume(&mut descs, 100).unwrap() };
 
 		// TODO: make this do the send per-batch?
@@ -299,7 +322,7 @@ fn pkt_loop(idx: usize, mut tx: TxQueue, mut rx: RxQueue, mut descs: Vec<FrameDe
 
 			{
 				if let Some(mut ether) = MutableEthernetPacket::new(body) {
-					println!("thread {} swapping: {:#?}", idx, ether);
+					// println!("thread {} swapping: {:#?}", idx, ether);
 
 					let old_src = ether.get_source();
 					let old_dst = ether.get_destination();
@@ -312,4 +335,8 @@ fn pkt_loop(idx: usize, mut tx: TxQueue, mut rx: RxQueue, mut descs: Vec<FrameDe
 
 		unsafe { tx.produce_and_wakeup(&descs[..pkts_recvd]).unwrap() };
 	}
+
+	eprintln!("Thread {idx} dropping.");
+	drop(umem);
+	eprintln!("Thread {idx} dropped.");
 }

@@ -1,24 +1,13 @@
 use pnet::{
 	datalink::{Channel, Config as DlConfig},
 	packet::{
-		ethernet::{
-			EtherTypes,
-			EthernetPacket,
-			MutableEthernetPacket,
-		},
+		ethernet::{EtherTypes, EthernetPacket, MutableEthernetPacket},
 		ip::IpNextHeaderProtocols,
-		ipv4::{
-			self,
-			Ipv4Packet,
-			MutableIpv4Packet,
-		},
-		udp::{
-			MutableUdpPacket,
-			UdpPacket,
-		},
+		ipv4::{self, Ipv4Packet, MutableIpv4Packet},
+		udp::{MutableUdpPacket, UdpPacket},
 		MutablePacket,
 		Packet,
-	}
+	},
 };
 use protocol::messages::*;
 use std::{
@@ -81,7 +70,7 @@ fn main() -> AnyRes<()> {
 
 fn time_pkts(chan: Channel, src_mac: [u8; 6]) {
 	// let dst_mac = [0xbb,0xbb,0xbb,0xbb,0xbb,0xbb];
-	let dst_mac = [0xff,0xff,0xff,0xff,0xff,0xff];
+	let dst_mac = [0xff, 0xff, 0xff, 0xff, 0xff, 0xff];
 	let n_pkts = 100_000;
 
 	let (mut pkt_tx, mut pkt_rx) = match chan {
@@ -118,8 +107,7 @@ fn time_pkts(chan: Channel, src_mac: [u8; 6]) {
 
 		while let Ok(bytes) = pkt_rx.next() {
 			let t = Instant::now();
-			let eth_pkt = EthernetPacket::new(bytes)
-				.expect("Plenty of room...");
+			let eth_pkt = EthernetPacket::new(bytes).expect("Plenty of room...");
 
 			if eth_pkt.get_ethertype() != EtherTypes::Ipv4 {
 				continue;
@@ -127,7 +115,7 @@ fn time_pkts(chan: Channel, src_mac: [u8; 6]) {
 
 			let src = eth_pkt.get_source().octets();
 			let dst = eth_pkt.get_destination().octets();
-			
+
 			// swapped == hit user-level.
 			let skipped_user = match (src, dst) {
 				a if a == (src_mac, dst_mac) => true,
@@ -139,15 +127,15 @@ fn time_pkts(chan: Channel, src_mac: [u8; 6]) {
 			// println!("DST {:x?} vs {dst_mac:x?} -- {} {}", dst, dst==src_mac, dst==dst_mac);
 			// println!("tx in xdp? {skipped_user}",);
 
-			let ipv4_pkt = Ipv4Packet::new(eth_pkt.payload())
-				.expect("Plenty of room...");
+			let ipv4_pkt = Ipv4Packet::new(eth_pkt.payload()).expect("Plenty of room...");
 
-			if ipv4_pkt.get_next_level_protocol() != IpNextHeaderProtocols::Udp || ipv4_pkt.get_ttl() != 63 {
+			if ipv4_pkt.get_next_level_protocol() != IpNextHeaderProtocols::Udp
+				|| ipv4_pkt.get_ttl() != 63
+			{
 				continue;
 			}
 
-			let udp_pkt = UdpPacket::new(ipv4_pkt.payload())
-				.expect("roomy...");
+			let udp_pkt = UdpPacket::new(ipv4_pkt.payload()).expect("roomy...");
 
 			if !(udp_pkt.get_source() == 3000 && udp_pkt.get_destination() == 3000) {
 				continue;
@@ -210,8 +198,7 @@ fn build_pkt(buf: &mut [u8], payload_len: usize, src_mac: [u8; 6], dst_mac: [u8;
 	// sort of have to build from scratch if we want to write
 	// straight over the NIC.
 	{
-		let mut eth_pkt = MutableEthernetPacket::new(buf)
-			.expect("Plenty of room...");
+		let mut eth_pkt = MutableEthernetPacket::new(buf).expect("Plenty of room...");
 		eth_pkt.set_destination(dst_mac.into());
 		// not important to set source, not interested in receiving a reply...
 		eth_pkt.set_ethertype(EtherTypes::Ipv4);
@@ -219,8 +206,8 @@ fn build_pkt(buf: &mut [u8], payload_len: usize, src_mac: [u8; 6], dst_mac: [u8;
 	}
 
 	{
-		let mut ipv4_pkt = MutableIpv4Packet::new(&mut buf[ETH_HEADER_LEN..])
-			.expect("Plenty of room...");
+		let mut ipv4_pkt =
+			MutableIpv4Packet::new(&mut buf[ETH_HEADER_LEN..]).expect("Plenty of room...");
 		ipv4_pkt.set_version(4);
 		ipv4_pkt.set_header_length(5);
 		ipv4_pkt.set_ttl(64);
@@ -249,8 +236,8 @@ fn build_pkt(buf: &mut [u8], payload_len: usize, src_mac: [u8; 6], dst_mac: [u8;
 }
 
 fn modify_pkt(buf: &mut [u8], pkt_idx: u64) {
-	let mut ipv4_pkt = MutableIpv4Packet::new(&mut buf[ETH_HEADER_LEN..])
-		.expect("Plenty of room...");
+	let mut ipv4_pkt =
+		MutableIpv4Packet::new(&mut buf[ETH_HEADER_LEN..]).expect("Plenty of room...");
 
 	// ipv4_pkt.set_source(((pkt_idx >> 32) as u32).into());
 	// ipv4_pkt.set_destination((pkt_idx as u32).into());
@@ -258,8 +245,7 @@ fn modify_pkt(buf: &mut [u8], pkt_idx: u64) {
 	// let csum = ipv4::checksum(&ipv4_pkt.to_immutable());
 	// ipv4_pkt.set_checksum(csum);
 
-	let mut udp_pkt = MutableUdpPacket::new(ipv4_pkt.payload_mut())
-		.expect("Space ahoy!");
+	let mut udp_pkt = MutableUdpPacket::new(ipv4_pkt.payload_mut()).expect("Space ahoy!");
 
 	(&mut udp_pkt.payload_mut()[..std::mem::size_of::<u64>()])
 		.copy_from_slice(&pkt_idx.to_be_bytes());
