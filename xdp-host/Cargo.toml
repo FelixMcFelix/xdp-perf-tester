@@ -9,6 +9,7 @@ edition = "2021"
 
 [dependencies]
 bus = "2"
+core_affinity = "0.5"
 flume = "0.10"
 libbpf-rs = "0.16"
 nix = "0.23"

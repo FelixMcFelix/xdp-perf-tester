@@ -34,11 +34,13 @@ fn build_ebpf(request: &EbpfProg) -> IoResult<UserProgramNeeds> {
 			program: "xskmaptest.elf".into(),
 			handler: "xdp_sock_prog".into(),
 			n_sks: 2,
+			n_user_ops: 0,
 		}),
 		RustKern {
 			n_cores,
 			n_ops,
 			tx_chance,
+			user_ops,
 		} => {
 			let mut cmd = Command::new("/home/netlab/gits/redbpf/target/release/cargo-bpf");
 
@@ -65,6 +67,7 @@ fn build_ebpf(request: &EbpfProg) -> IoResult<UserProgramNeeds> {
 					program: "./target/bpf/programs/xskmaptest/xskmaptest.elf".into(),
 					handler: "outer_xdp_sock_prog".into(),
 					n_sks: n_cores.unwrap_or(1) as usize,
+					n_user_ops: user_ops.unwrap_or(0) as usize,
 				}
 			})
 		},
@@ -75,6 +78,7 @@ struct UserProgramNeeds {
 	program: String,
 	handler: String,
 	n_sks: usize,
+	n_user_ops: usize,
 }
 
 impl UserProgramNeeds {
@@ -167,12 +171,6 @@ fn run_ebpf(
 		.libbpf_flags(LibbpfFlags::XSK_LIBBPF_FLAGS_INHIBIT_PROG_LOAD)
 		.build();
 
-	// let test_details = EbpfTest::RKern {
-	// 	n_cores: Some(8),
-	// 	n_ops: Some(128),
-	// 	tx_chance: Some(0.0),
-	// };
-
 	let prog_details = build_ebpf(&req).unwrap();
 
 	let (mut prog, _link) = prog_details.load(IFACE);
@@ -207,6 +205,9 @@ fn run_ebpf(
 
 	let mut bus = Bus::new(1);
 
+	let user_ops = prog_details.n_user_ops;
+	let cores = core_affinity::get_core_ids();
+
 	for (i, (tx_q, rx_q)) in sockets.drain(..).enumerate() {
 		println!(
 			"Inserting FD {} into map: {}[{}]",
@@ -231,7 +232,14 @@ fn run_ebpf(
 		let my_umem = umem.clone();
 		let my_bus = bus.add_rx();
 
-		let _ = std::thread::spawn(move || pkt_loop(i, tx_q, rx_q, my_descs, my_umem, my_bus));
+		let my_core = cores.as_ref().map(|v| v[i % v.len()]);
+
+		let _ = std::thread::spawn(move || {
+			if let Some(core) = my_core {
+				core_affinity::set_for_current(core);
+			}
+			pkt_loop(i, user_ops, tx_q, rx_q, my_descs, my_umem, my_bus)
+		});
 	}
 
 	let _ = live_tx.send(());
@@ -299,6 +307,7 @@ fn pkt_loop_single(
 
 fn pkt_loop(
 	idx: usize,
+	user_ops: usize,
 	mut tx: TxQueue,
 	mut rx: RxQueue,
 	mut descs: Vec<FrameDesc>,
@@ -306,6 +315,7 @@ fn pkt_loop(
 	mut kill_rx: BusReader<()>,
 ) {
 	eprintln!("Thread {idx} entering.");
+	let mut ct: u64 = 0;
 
 	loop {
 		match kill_rx.try_recv() {
@@ -329,6 +339,10 @@ fn pkt_loop(
 
 					ether.set_source(old_dst);
 					ether.set_destination(old_src);
+
+					for _i in 0..user_ops {
+						ct = ct.wrapping_add(1);
+					}
 				}
 			}
 		}
@@ -336,7 +350,15 @@ fn pkt_loop(
 		unsafe { tx.produce_and_wakeup(&descs[..pkts_recvd]).unwrap() };
 	}
 
-	eprintln!("Thread {idx} dropping.");
+	eprintln!("Thread {idx} dropping umem.");
 	drop(umem);
-	eprintln!("Thread {idx} dropped.");
+	eprintln!("Thread {idx} dropped umem.");
+
+	eprintln!("Thread {idx} dropping tx.");
+	drop(tx);
+	eprintln!("Thread {idx} dropped tx.");
+
+	eprintln!("Thread {idx} dropping rx.");
+	drop(rx);
+	eprintln!("Thread {idx} dropped rx.");
 }

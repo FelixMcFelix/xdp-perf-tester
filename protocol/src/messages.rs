@@ -27,6 +27,7 @@ pub enum EbpfProg {
 		n_cores: Option<u64>,
 		n_ops: Option<u64>,
 		tx_chance: Option<f64>,
+		user_ops: Option<u64>,
 	},
 }
 
