@@ -53,6 +53,7 @@ fn main() -> AnyRes<()> {
 		n_cores: Some(4),
 		n_ops: Some(200),
 		tx_chance: Some(0.2),
+		user_ops: Some(0),
 	};
 
 	let _ = wipe_target();
