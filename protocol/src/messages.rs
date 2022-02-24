@@ -5,11 +5,13 @@ use tungstenite::protocol::Message;
 pub enum ClientToHost {
 	BpfBuildInstall(EbpfProg),
 	BpfClose,
+	MacRequest,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
 pub enum HostToClient {
 	Success,
+	MacReply([u8; 6]),
 	Fail(FailReason),
 	IllegalRequest,
 }

@@ -1,7 +1,7 @@
 use bus::{Bus, BusReader};
 use flume::{Receiver, Sender};
 use libbpf_rs::{Link, MapFlags, Object, ObjectBuilder};
-use pnet::packet::ethernet::MutableEthernetPacket;
+use pnet::packet::{ethernet::MutableEthernetPacket, ipv4::MutableIpv4Packet, MutablePacket};
 use protocol::messages::*;
 use std::{
 	convert::TryInto,
@@ -9,6 +9,7 @@ use std::{
 	io::Result as IoResult,
 	os::unix::io::AsRawFd,
 	process::Command,
+	sync::{Arc, Barrier},
 };
 use xsk_rs::{
 	config::{LibbpfFlags, SocketConfig, UmemConfig},
@@ -111,6 +112,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 	let (tx, rx) = protocol::host::host_server(protocol::DEFAULT_PORT);
 	let mut prog = None;
+	let mut first_time = true;
 
 	for msg in rx.iter() {
 		use ClientToHost::*;
@@ -120,8 +122,10 @@ fn main() -> Result<(), Box<dyn Error>> {
 				let (kill_tx, kill_rx) = flume::bounded(1);
 				let (live_tx, live_rx) = flume::bounded(1);
 				let handle = std::thread::spawn(move || {
-					run_ebpf(params, kill_rx, live_tx);
+					run_ebpf(params, kill_rx, live_tx, first_time);
 				});
+
+				first_time = false;
 
 				prog = Some((handle, kill_tx));
 
@@ -149,16 +153,37 @@ fn main() -> Result<(), Box<dyn Error>> {
 					let _ = tx.send(HostToClient::Success);
 				}
 			},
+			MacRequest => {
+				let _ = tx.send(match get_mac() {
+					Ok(mac) => HostToClient::MacReply(mac),
+					Err(e) => HostToClient::Fail(FailReason::Generic(e.to_string())),
+				});
+			},
 		}
 	}
 
 	Ok(())
 }
 
+fn get_mac() -> Result<[u8; 6], Box<dyn Error>> {
+	for iface in pnet::datalink::interfaces() {
+		if iface.name == IFACE {
+			return if let Some(mac) = iface.mac {
+				Ok(mac.octets())
+			} else {
+				Err(format!("Interface {IFACE} has no MAC address.").into())
+			};
+		}
+	}
+
+	Err(format!("Interface {IFACE} not found.").into())
+}
+
 fn run_ebpf(
 	req: EbpfProg,
 	kill_rx: Receiver<()>,
 	live_tx: Sender<()>,
+	first_time: bool,
 ) -> Result<(), Box<dyn Error>> {
 	let (umem, descs) = Umem::new(UmemConfig::default(), 1024.try_into().unwrap(), false)
 		.expect("failed to create UMEM");
@@ -167,9 +192,15 @@ fn run_ebpf(
 		println!("IFACE: {:?}", iface)
 	}
 
-	let skt_cfg = SocketConfig::builder()
-		.libbpf_flags(LibbpfFlags::XSK_LIBBPF_FLAGS_INHIBIT_PROG_LOAD)
-		.build();
+	let skt_cfg = if first_time {
+		SocketConfig::builder()
+			.libbpf_flags(LibbpfFlags::XSK_LIBBPF_FLAGS_INHIBIT_PROG_LOAD)
+			.build()
+	} else {
+		SocketConfig::builder()
+			// .libbpf_flags(LibbpfFlags::XSK_LIBBPF_FLAGS_INHIBIT_PROG_LOAD)
+			.build()
+	};
 
 	let prog_details = build_ebpf(&req).unwrap();
 
@@ -204,6 +235,7 @@ fn run_ebpf(
 	}
 
 	let mut bus = Bus::new(1);
+	let barrier = Arc::new(Barrier::new(1 + sockets.len()));
 
 	let user_ops = prog_details.n_user_ops;
 	let cores = core_affinity::get_core_ids();
@@ -231,6 +263,7 @@ fn run_ebpf(
 		let my_descs = descs.clone();
 		let my_umem = umem.clone();
 		let my_bus = bus.add_rx();
+		let my_barrier = barrier.clone();
 
 		let my_core = cores.as_ref().map(|v| v[i % v.len()]);
 
@@ -238,13 +271,15 @@ fn run_ebpf(
 			if let Some(core) = my_core {
 				core_affinity::set_for_current(core);
 			}
-			pkt_loop(i, user_ops, tx_q, rx_q, my_descs, my_umem, my_bus)
+			pkt_loop(
+				i, user_ops, tx_q, rx_q, my_descs, my_umem, my_bus, my_barrier,
+			)
 		});
 	}
 
 	let _ = live_tx.send(());
 
-	fq_cq_mediator(cq, fq, descs, kill_rx, bus);
+	fq_cq_mediator(cq, fq, descs, kill_rx, bus, barrier);
 
 	Ok(())
 }
@@ -255,6 +290,7 @@ fn fq_cq_mediator(
 	mut descs: Vec<FrameDesc>,
 	kill_rx: Receiver<()>,
 	mut bus: Bus<()>,
+	barrier: Arc<Barrier>,
 ) {
 	loop {
 		match kill_rx.try_recv() {
@@ -269,40 +305,9 @@ fn fq_cq_mediator(
 	}
 
 	bus.broadcast(());
+	barrier.wait();
 
 	eprintln!("Mediator dropped.");
-}
-
-fn pkt_loop_single(
-	idx: usize,
-	mut tx: TxQueue,
-	mut rx: RxQueue,
-	mut descs: Vec<FrameDesc>,
-	umem: Umem,
-) {
-	loop {
-		let pkts_recvd = unsafe { rx.poll_and_consume(&mut descs, 100).unwrap() };
-
-		// TODO: make this do the send per-batch?
-		for recv_desc in descs.iter_mut().take(pkts_recvd) {
-			let mut data = unsafe { umem.data_mut(recv_desc) };
-			let body = data.contents_mut();
-
-			{
-				if let Some(mut ether) = MutableEthernetPacket::new(body) {
-					// println!("thread {} swapping: {:#?}", idx, ether);
-
-					let old_src = ether.get_source();
-					let old_dst = ether.get_destination();
-
-					ether.set_source(old_dst);
-					ether.set_destination(old_src);
-				}
-			}
-
-			unsafe { tx.produce_one_and_wakeup(recv_desc).unwrap() };
-		}
-	}
 }
 
 fn pkt_loop(
@@ -313,6 +318,7 @@ fn pkt_loop(
 	mut descs: Vec<FrameDesc>,
 	umem: Umem,
 	mut kill_rx: BusReader<()>,
+	barrier: Arc<Barrier>,
 ) {
 	eprintln!("Thread {idx} entering.");
 	let mut ct: u64 = 0;
@@ -332,13 +338,10 @@ fn pkt_loop(
 
 			{
 				if let Some(mut ether) = MutableEthernetPacket::new(body) {
-					// println!("thread {} swapping: {:#?}", idx, ether);
-
-					let old_src = ether.get_source();
-					let old_dst = ether.get_destination();
-
-					ether.set_source(old_dst);
-					ether.set_destination(old_src);
+					// println!("thread {} decing: {:#?}", idx, ether);
+					if let Some(mut ip) = MutableIpv4Packet::new(ether.payload_mut()) {
+						ip.set_ttl(ip.get_ttl() - 1);
+					}
 
 					for _i in 0..user_ops {
 						ct = ct.wrapping_add(1);
@@ -349,6 +352,8 @@ fn pkt_loop(
 
 		unsafe { tx.produce_and_wakeup(&descs[..pkts_recvd]).unwrap() };
 	}
+
+	barrier.wait();
 
 	eprintln!("Thread {idx} dropping umem.");
 	drop(umem);

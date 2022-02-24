@@ -60,20 +60,22 @@ fn main() -> AnyRes<()> {
 
 	std::thread::sleep(Duration::from_millis(20));
 
+	let tgt_mac = get_target_mac()?;
+
 	setup_target(prog)?;
 
 	std::thread::sleep(Duration::from_millis(20));
 
-	time_pkts(channel, mac.octets(), 1500);
+	time_pkts(channel, mac.octets(), tgt_mac, 1500);
 
 	wipe_target();
 
 	Ok(())
 }
 
-fn time_pkts(chan: Channel, src_mac: [u8; 6], pkt_size: usize) {
+fn time_pkts(chan: Channel, src_mac: [u8; 6], dst_mac: [u8; 6], pkt_size: usize) {
 	// let dst_mac = [0xbb,0xbb,0xbb,0xbb,0xbb,0xbb];
-	let dst_mac = [0xff, 0xff, 0xff, 0xff, 0xff, 0xff];
+	// let dst_mac = [0xff, 0xff, 0xff, 0xff, 0xff, 0xff];
 	let n_pkts = 100_000;
 
 	let (mut pkt_tx, mut pkt_rx) = match chan {
@@ -102,7 +104,7 @@ fn time_pkts(chan: Channel, src_mac: [u8; 6], pkt_size: usize) {
 		}
 
 		// estimate speed here?
-		let dt = space[space.len()-1] - space[0];
+		let dt = space[space.len() - 1] - space[0];
 		let bits = (n_pkts as f64) * (pkt_size as f64) * 8.0;
 		let speed = bits / dt.as_secs_f64();
 
@@ -126,12 +128,10 @@ fn time_pkts(chan: Channel, src_mac: [u8; 6], pkt_size: usize) {
 			let src = eth_pkt.get_source().octets();
 			let dst = eth_pkt.get_destination().octets();
 
-			// swapped == hit user-level.
-			let skipped_user = match (src, dst) {
-				a if a == (src_mac, dst_mac) => true,
-				a if a == (dst_mac, src_mac) => false,
-				_ => continue,
-			};
+			// mac swap required on seen pkts
+			if !(src == dst_mac && dst == src_mac) {
+				continue;
+			}
 
 			// println!("SRC {:x?} vs {src_mac:x?} -- {} {}", src, src==src_mac, src==dst_mac);
 			// println!("DST {:x?} vs {dst_mac:x?} -- {} {}", dst, dst==src_mac, dst==dst_mac);
@@ -139,11 +139,11 @@ fn time_pkts(chan: Channel, src_mac: [u8; 6], pkt_size: usize) {
 
 			let ipv4_pkt = Ipv4Packet::new(eth_pkt.payload()).expect("Plenty of room...");
 
-			if ipv4_pkt.get_next_level_protocol() != IpNextHeaderProtocols::Udp
-				|| ipv4_pkt.get_ttl() != 63
-			{
+			if ipv4_pkt.get_next_level_protocol() != IpNextHeaderProtocols::Udp {
 				continue;
 			}
+
+			let skipped_user = ipv4_pkt.get_ttl() == 63;
 
 			let udp_pkt = UdpPacket::new(ipv4_pkt.payload()).expect("roomy...");
 
@@ -299,6 +299,31 @@ fn wipe_target() -> AnyRes<()> {
 	let _ = ws.close(None)?;
 
 	Ok(())
+}
+
+fn get_target_mac() -> AnyRes<[u8; 6]> {
+	let (mut ws, _resp) =
+		tungstenite::connect(format!("ws://{}:{}", "gozo", protocol::DEFAULT_PORT))?;
+
+	ws.write_message(for_ws(&ClientToHost::MacRequest))?;
+
+	let mut out = None;
+
+	while let Ok(msg) = read_msg(&mut ws) {
+		match msg {
+			Some(HostToClient::MacReply(bytes)) => {
+				out = Some(bytes);
+				break;
+			},
+			Some(HostToClient::Fail(f)) => return Err(format!("Failed: {:?}", f).into()),
+			Some(HostToClient::IllegalRequest) => return Err("IllegalRequest".to_string().into()),
+			_ => {},
+		}
+	}
+
+	let _ = ws.close(None)?;
+
+	Ok(out.unwrap())
 }
 
 fn read_msg<A: Read + Write>(ws: &mut WebSocket<A>) -> AnyRes<Option<HostToClient>> {

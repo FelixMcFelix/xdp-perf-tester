@@ -27,10 +27,17 @@ fn xdp_sock_prog(ctx: XdpContext) -> XdpResult {
 		black_box(1 + i);
 	}
 
-	if let Ok(my_iphdr) = ctx.ip() {
+	// if let Ok(my_iphdr) = ctx.ip() {
+	// 	unsafe {
+	// 		let my_iphdr = &mut *(my_iphdr as *mut iphdr);
+	// 		my_iphdr.ttl -= 1;
+	// 	}
+	// }
+
+	if let Ok(my_eth_hdr) = ctx.eth() {
 		unsafe {
-			let my_iphdr = &mut *(my_iphdr as *mut iphdr);
-			my_iphdr.ttl -= 1;
+			let my_eth_hdr = &mut *(my_eth_hdr as *mut ethhdr);
+			core::mem::swap(&mut my_eth_hdr.h_dest, &mut my_eth_hdr.h_source);
 		}
 	}
 

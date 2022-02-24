@@ -1,5 +1,5 @@
 [package]
-name = "xdp-perf-tester"
+name = "xdp-host"
 authors = ["Kyle Simpson"]
 email = "kyleandrew.simpson@gmail.com"
 version = "0.1.0"
