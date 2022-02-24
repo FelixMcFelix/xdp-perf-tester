@@ -62,17 +62,19 @@ fn main() -> AnyRes<()> {
 
 	setup_target(prog)?;
 
-	time_pkts(channel, mac.octets());
+	std::thread::sleep(Duration::from_millis(20));
+
+	time_pkts(channel, mac.octets(), 1500);
 
 	wipe_target();
 
 	Ok(())
 }
 
-fn time_pkts(chan: Channel, src_mac: [u8; 6]) {
+fn time_pkts(chan: Channel, src_mac: [u8; 6], pkt_size: usize) {
 	// let dst_mac = [0xbb,0xbb,0xbb,0xbb,0xbb,0xbb];
 	let dst_mac = [0xff, 0xff, 0xff, 0xff, 0xff, 0xff];
-	let n_pkts = 10_000;
+	let n_pkts = 100_000;
 
 	let (mut pkt_tx, mut pkt_rx) = match chan {
 		Channel::Ethernet(tx, rx) => (tx, rx),
@@ -84,7 +86,9 @@ fn time_pkts(chan: Channel, src_mac: [u8; 6]) {
 		let mut space = Vec::with_capacity(n_pkts);
 		let mut pkt_buf = [0u8; 1560];
 
-		let len = build_pkt(&mut pkt_buf[..], 200, src_mac, dst_mac);
+		let payload_len = pkt_size - 42;
+
+		let len = build_pkt(&mut pkt_buf[..], payload_len, src_mac, dst_mac);
 
 		for i in 0..(n_pkts as u64) {
 			modify_pkt(&mut pkt_buf[..len], i);
@@ -97,7 +101,12 @@ fn time_pkts(chan: Channel, src_mac: [u8; 6]) {
 			// std::thread::sleep(Duration::from_millis(20));
 		}
 
-		println!("All sent");
+		// estimate speed here?
+		let dt = space[space.len()-1] - space[0];
+		let bits = (n_pkts as f64) * (pkt_size as f64) * 8.0;
+		let speed = bits / dt.as_secs_f64();
+
+		println!("All sent: {}Mbps", speed / 1e6);
 
 		space
 	});
@@ -188,8 +197,8 @@ fn time_pkts(chan: Channel, src_mac: [u8; 6]) {
 		}
 	}
 
-	println!("K: {:?}", kern_ts);
-	println!("U: {:?}", user_ts);
+	// println!("K: {:?}", kern_ts);
+	// println!("U: {:?}", user_ts);
 
 	println!("Kmed: {:?}", stats::median(kern_ts.clone().drain(..)));
 	println!("Umed: {:?}", stats::median(user_ts.clone().drain(..)));
