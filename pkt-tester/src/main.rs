@@ -27,7 +27,8 @@ fn main() -> AnyRes<()> {
 	let interfaces = pnet::datalink::interfaces();
 
 	// let iface: Option<&str> = None;
-	let iface = Some("\\Device\\NPF_{A9F99251-A118-4386-B7A3-0A0604ACC11C}");
+	//let iface = Some("\\Device\\NPF_{A9F99251-A118-4386-B7A3-0A0604ACC11C}");
+	let iface = Some("enp1s0f0");
 	let iface = iface.and_then(|name| {
 		interfaces
 			.iter()
@@ -52,8 +53,13 @@ fn main() -> AnyRes<()> {
 	let prog = EbpfProg::RustKern {
 		n_cores: Some(4),
 		n_ops: Some(200),
-		tx_chance: Some(0.2),
+		tx_chance: Some(0.8),
 		user_ops: Some(0),
+	};
+
+	let xsk_cfg = XskConfig {
+		skb_mode: false,
+		zero_copy: true,
 	};
 
 	let _ = wipe_target();
@@ -62,13 +68,15 @@ fn main() -> AnyRes<()> {
 
 	let tgt_mac = get_target_mac()?;
 
-	setup_target(prog)?;
-
 	std::thread::sleep(Duration::from_millis(20));
+
+	setup_target(prog, xsk_cfg)?;
+
+	std::thread::sleep(Duration::from_secs(1));
 
 	time_pkts(channel, mac.octets(), tgt_mac, 1500);
 
-	wipe_target();
+	//wipe_target();
 
 	Ok(())
 }
@@ -76,6 +84,7 @@ fn main() -> AnyRes<()> {
 fn time_pkts(chan: Channel, src_mac: [u8; 6], dst_mac: [u8; 6], pkt_size: usize) {
 	// let dst_mac = [0xbb,0xbb,0xbb,0xbb,0xbb,0xbb];
 	// let dst_mac = [0xff, 0xff, 0xff, 0xff, 0xff, 0xff];
+	// let dst_mac = [0x3c, 0xfd, 0xfe, 0x9e, 0xa3, 0x20];
 	let n_pkts = 100_000;
 
 	let (mut pkt_tx, mut pkt_rx) = match chan {
@@ -143,7 +152,7 @@ fn time_pkts(chan: Channel, src_mac: [u8; 6], dst_mac: [u8; 6], pkt_size: usize)
 				continue;
 			}
 
-			let skipped_user = ipv4_pkt.get_ttl() == 63;
+			let skipped_user = ipv4_pkt.get_ttl() == 64;
 
 			let udp_pkt = UdpPacket::new(ipv4_pkt.payload()).expect("roomy...");
 
@@ -261,11 +270,12 @@ fn modify_pkt(buf: &mut [u8], pkt_idx: u64) {
 		.copy_from_slice(&pkt_idx.to_be_bytes());
 }
 
-fn setup_target(prog: EbpfProg) -> AnyRes<()> {
+fn setup_target(prog: EbpfProg, cfg: XskConfig) -> AnyRes<()> {
 	let (mut ws, _resp) =
-		tungstenite::connect(format!("ws://{}:{}", "gozo", protocol::DEFAULT_PORT))?;
+	//	tungstenite::connect(format!("ws://{}:{}", "ava7", protocol::DEFAULT_PORT))?;
+		tungstenite::connect(format!("ws://{}:{}", "192.168.0.86", protocol::DEFAULT_PORT))?;
 
-	ws.write_message(for_ws(&ClientToHost::BpfBuildInstall(prog)))?;
+	ws.write_message(for_ws(&ClientToHost::BpfBuildInstall(prog, cfg)))?;
 
 	while let Ok(msg) = read_msg(&mut ws) {
 		match msg {
@@ -283,7 +293,7 @@ fn setup_target(prog: EbpfProg) -> AnyRes<()> {
 
 fn wipe_target() -> AnyRes<()> {
 	let (mut ws, _resp) =
-		tungstenite::connect(format!("ws://{}:{}", "gozo", protocol::DEFAULT_PORT))?;
+		tungstenite::connect(format!("ws://{}:{}", "ava7", protocol::DEFAULT_PORT))?;
 
 	ws.write_message(for_ws(&ClientToHost::BpfClose))?;
 
@@ -303,7 +313,7 @@ fn wipe_target() -> AnyRes<()> {
 
 fn get_target_mac() -> AnyRes<[u8; 6]> {
 	let (mut ws, _resp) =
-		tungstenite::connect(format!("ws://{}:{}", "gozo", protocol::DEFAULT_PORT))?;
+		tungstenite::connect(format!("ws://{}:{}", "ava7", protocol::DEFAULT_PORT))?;
 
 	ws.write_message(for_ws(&ClientToHost::MacRequest))?;
 

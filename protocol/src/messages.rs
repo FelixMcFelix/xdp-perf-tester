@@ -3,7 +3,7 @@ use tungstenite::protocol::Message;
 
 #[derive(Clone, Deserialize, Serialize)]
 pub enum ClientToHost {
-	BpfBuildInstall(EbpfProg),
+	BpfBuildInstall(EbpfProg, XskConfig),
 	BpfClose,
 	MacRequest,
 }
@@ -31,6 +31,12 @@ pub enum EbpfProg {
 		tx_chance: Option<f64>,
 		user_ops: Option<u64>,
 	},
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct XskConfig {
+	pub skb_mode: bool,
+	pub zero_copy: bool,
 }
 
 pub fn for_ws(msg: &impl Serialize) -> Message {
