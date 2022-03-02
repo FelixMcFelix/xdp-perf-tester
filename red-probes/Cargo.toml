@@ -6,11 +6,11 @@ edition = '2018'
 [dependencies]
 cty = "0.2"
 konst = "0.2"
-redbpf-macros = { version = "2.3.0", git = "https://github.com/foniod/redbpf/", rev = "71d1e7dbe495013e89403b4bff7c01fd4f7fda48" }
-redbpf-probes = { version = "2.3.0", git = "https://github.com/foniod/redbpf/", rev = "71d1e7dbe495013e89403b4bff7c01fd4f7fda48" }
+redbpf-macros = { version = "2.3.0", git = "https://github.com/foniod/redbpf/", rev = "af115e7070228f8cf00f6548d8f0c85eedb8a6bf" }
+redbpf-probes = { version = "2.3.0", git = "https://github.com/foniod/redbpf/", rev = "af115e7070228f8cf00f6548d8f0c85eedb8a6bf" }
 
 [build-dependencies]
-cargo-bpf = { version = "2.3.0", git = "https://github.com/foniod/redbpf/", rev = "71d1e7dbe495013e89403b4bff7c01fd4f7fda48", default-features = false }
+cargo-bpf = { version = "2.3.0", git = "https://github.com/foniod/redbpf/", rev = "af115e7070228f8cf00f6548d8f0c85eedb8a6bf", default-features = false }
 
 [features]
 default = []

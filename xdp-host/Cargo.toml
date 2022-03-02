@@ -11,9 +11,9 @@ edition = "2021"
 bus = "2"
 core_affinity = "0.5"
 flume = "0.10"
-libbpf-rs = "0.16"
+libbpf-rs = { version = "0.16", git = "https://github.com/libbpf/libbpf-rs" }
 nix = "0.23"
 pnet = "0.29"
 protocol = { path = "../protocol" }
 sudo = "0.6"
-xsk-rs = { version = "0.3", git = "https://github.com/FelixMcFelix/xsk-rs/", branch = "mut-access" }
+xsk-rs = { path = "../../xsk-rs/" }

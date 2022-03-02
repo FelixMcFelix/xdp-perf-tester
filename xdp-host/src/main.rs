@@ -22,7 +22,7 @@ use xsk_rs::{
 	TxQueue,
 };
 
-const IFACE: &str = "eno1";
+const IFACE: &str = "enp1s0f0";
 const TABLE: &str = "xsks_map";
 
 fn build_ebpf(request: &EbpfProg) -> IoResult<UserProgramNeeds> {
@@ -43,7 +43,7 @@ fn build_ebpf(request: &EbpfProg) -> IoResult<UserProgramNeeds> {
 			tx_chance,
 			user_ops,
 		} => {
-			let mut cmd = Command::new("/home/netlab/gits/redbpf/target/release/cargo-bpf");
+			let mut cmd = Command::new("/home/clouduser/redbpf/target/release/cargo-bpf");
 
 			cmd.current_dir("red-probes/")
 				.args(["bpf", "build", "--target-dir=../target"]);
@@ -118,11 +118,11 @@ fn main() -> Result<(), Box<dyn Error>> {
 		use ClientToHost::*;
 
 		match msg {
-			BpfBuildInstall(params) => {
+			BpfBuildInstall(params, xsk_cfg) => {
 				let (kill_tx, kill_rx) = flume::bounded(1);
 				let (live_tx, live_rx) = flume::bounded(1);
 				let handle = std::thread::spawn(move || {
-					run_ebpf(params, kill_rx, live_tx, first_time);
+					run_ebpf(params, xsk_cfg, kill_rx, live_tx, first_time);
 				});
 
 				first_time = false;
@@ -181,6 +181,7 @@ fn get_mac() -> Result<[u8; 6], Box<dyn Error>> {
 
 fn run_ebpf(
 	req: EbpfProg,
+    xsk_cfg: XskConfig,
 	kill_rx: Receiver<()>,
 	live_tx: Sender<()>,
 	first_time: bool,
@@ -192,15 +193,27 @@ fn run_ebpf(
 		println!("IFACE: {:?}", iface)
 	}
 
-	let skt_cfg = if first_time {
-		SocketConfig::builder()
-			.libbpf_flags(LibbpfFlags::XSK_LIBBPF_FLAGS_INHIBIT_PROG_LOAD)
-			.build()
-	} else {
-		SocketConfig::builder()
-			// .libbpf_flags(LibbpfFlags::XSK_LIBBPF_FLAGS_INHIBIT_PROG_LOAD)
-			.build()
-	};
+	let mut skt_cfg = SocketConfig::builder();
+
+	skt_cfg.libbpf_flags(LibbpfFlags::XSK_LIBBPF_FLAGS_INHIBIT_PROG_LOAD);
+
+    if xsk_cfg.zero_copy {
+        print!("Zero-copy ");
+        skt_cfg.bind_flags(xsk_rs::config::BindFlags::XDP_ZEROCOPY);
+    } else {
+        print!("Force copy ");
+        skt_cfg.bind_flags(xsk_rs::config::BindFlags::XDP_COPY);
+    }
+
+    if xsk_cfg.skb_mode {
+        println!("SKB mode.");
+        skt_cfg.xdp_flags(xsk_rs::config::XdpFlags::XDP_FLAGS_SKB_MODE);
+    } else {
+        println!("DRV mode.");
+        skt_cfg.xdp_flags(xsk_rs::config::XdpFlags::XDP_FLAGS_DRV_MODE);
+    }
+
+    let skt_cfg = skt_cfg.build();
 
 	let prog_details = build_ebpf(&req).unwrap();
 
@@ -213,7 +226,7 @@ fn run_ebpf(
 	let mut sockets: Vec<(TxQueue, RxQueue)> = (0..prog_details.n_sks)
 		.map(|_| {
 			let (tx_q, rx_q, maybe_fq_and_cq) =
-				Socket::new(skt_cfg, &umem, &IFACE.parse().unwrap(), 0)
+				Socket::new(skt_cfg, &umem, &IFACE.parse().unwrap(), 2)//0)
 					.expect("failed to create dev2 socket");
 
 			if maybe_fq_and_cq.is_some() {
@@ -338,7 +351,7 @@ fn pkt_loop(
 
 			{
 				if let Some(mut ether) = MutableEthernetPacket::new(body) {
-					// println!("thread {} decing: {:#?}", idx, ether);
+					//println!("thread {} decing: {:#?}", idx, ether);
 					if let Some(mut ip) = MutableIpv4Packet::new(ether.payload_mut()) {
 						ip.set_ttl(ip.get_ttl() - 1);
 					}

@@ -22,9 +22,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.53"
+version = "1.0.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94a45b455c14666b85fc40a019e8ab9eb75e3a124e05494f5397122bc9eb06e0"
+checksum = "159bb86af3a200e19a068f4224eae4c8bb2d0fa054c7e5d1cacd5cef95e684cd"
 
 [[package]]
 name = "atomic-option"
@@ -81,11 +81,12 @@ dependencies = [
 [[package]]
 name = "bpf-sys"
 version = "2.3.0"
-source = "git+https://github.com/foniod/redbpf/?rev=71d1e7dbe495013e89403b4bff7c01fd4f7fda48#71d1e7dbe495013e89403b4bff7c01fd4f7fda48"
+source = "git+https://github.com/foniod/redbpf/?rev=af115e7070228f8cf00f6548d8f0c85eedb8a6bf#af115e7070228f8cf00f6548d8f0c85eedb8a6bf"
 dependencies = [
  "bindgen",
  "cc",
  "glob",
+ "libbpf-sys",
  "libc",
  "regex",
  "zero",
@@ -124,7 +125,7 @@ checksum = "c4872d67bab6358e59559027aa3b9157c53d9358c51423c17554809a8858e0f8"
 [[package]]
 name = "cargo-bpf"
 version = "2.3.0"
-source = "git+https://github.com/foniod/redbpf/?rev=71d1e7dbe495013e89403b4bff7c01fd4f7fda48#71d1e7dbe495013e89403b4bff7c01fd4f7fda48"
+source = "git+https://github.com/foniod/redbpf/?rev=af115e7070228f8cf00f6548d8f0c85eedb8a6bf#af115e7070228f8cf00f6548d8f0c85eedb8a6bf"
 dependencies = [
  "anyhow",
  "bindgen",
@@ -133,21 +134,22 @@ dependencies = [
  "glob",
  "goblin",
  "lazy_static",
+ "libbpf-sys",
  "proc-macro2",
  "quote",
  "regex",
  "rustc_version 0.4.0",
  "rustversion",
- "semver 1.0.5",
+ "semver 1.0.6",
  "syn",
  "tempfile",
 ]
 
 [[package]]
 name = "cc"
-version = "1.0.72"
+version = "1.0.73"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22a9137b95ea06864e018375b72adfb7db6e6f68cfc8df5a04d00288050485ee"
+checksum = "2fff2a6927b3bb87f9595d67196a70493f627687a71d87a0d692242c33f58c11"
 
 [[package]]
 name = "cexpr"
@@ -270,9 +272,9 @@ dependencies = [
 
 [[package]]
 name = "flume"
-version = "0.10.10"
+version = "0.10.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5d04dafd11240188e146b6f6476a898004cace3be31d4ec5e08e216bf4947ac0"
+checksum = "0b279436a715a9de95dcd26b151db590a71961cc06e54918b24fe0dd5b7d3fc4"
 dependencies = [
  "futures-core",
  "futures-sink",
@@ -321,9 +323,9 @@ dependencies = [
 
 [[package]]
 name = "getrandom"
-version = "0.2.4"
+version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "418d37c8b1d42553c93648be529cb70f920d3baf8ef469b74b9638df426e0b4c"
+checksum = "d39cd93900197114fa1fcb7ae84ca742095eed9442088988ae74fa744e930e77"
 dependencies = [
  "cfg-if 1.0.0",
  "js-sys",
@@ -380,9 +382,9 @@ dependencies = [
 
 [[package]]
 name = "httparse"
-version = "1.5.1"
+version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "acd94fdbe1d4ff688b67b04eee2e17bd50995534a61539e45adfefb45e5e5503"
+checksum = "9100414882e15fb7feccb4897e5f0ff0ff1ca7d1a86a23208ada4d7a18e6c6c4"
 
 [[package]]
 name = "idna"
@@ -475,13 +477,12 @@ checksum = "830d08ce1d1d941e6b30645f1a0eb5643013d835ce3779a5fc208261dbe10f55"
 [[package]]
 name = "libbpf-rs"
 version = "0.16.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d38abb4d431ee43eea14af5e80488d094e10100d2b7a4a68f1b8885699d02631"
+source = "git+https://github.com/libbpf/libbpf-rs#42b84c0e4a22d8e398649fe8e787080e8340a2db"
 dependencies = [
  "bitflags",
  "lazy_static",
  "libbpf-sys",
- "nix 0.22.3",
+ "nix",
  "num_enum",
  "strum_macros",
  "thiserror",
@@ -490,9 +491,9 @@ dependencies = [
 
 [[package]]
 name = "libbpf-sys"
-version = "0.6.0-1"
+version = "0.6.1-2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e2cd400737426f2a92b5b41071a0a63c9b493b7c67ff3e428967fded73af0668"
+checksum = "df746ec055dfd68b3d0e8ea8dd12882157529132652d0df2e001305ba4803f0c"
 dependencies = [
  "cc",
  "pkg-config",
@@ -500,9 +501,9 @@ dependencies = [
 
 [[package]]
 name = "libc"
-version = "0.2.114"
+version = "0.2.119"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0005d08a8f7b65fb8073cb697aa0b12b631ed251ce73d862ce50eeb52ce3b50"
+checksum = "1bf2e165bb3457c8e098ea76f3e3bc9db55f87aa90d52d0e6be741470916aaa4"
 
 [[package]]
 name = "libloading"
@@ -581,19 +582,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "729eb334247daa1803e0a094d0a5c55711b85571179f5ec6e53eccfdf7008958"
 dependencies = [
  "getrandom",
-]
-
-[[package]]
-name = "nix"
-version = "0.22.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e4916f159ed8e5de0082076562152a76b7a1f64a01fd9d1e0fea002c37624faf"
-dependencies = [
- "bitflags",
- "cc",
- "cfg-if 1.0.0",
- "libc",
- "memoffset",
 ]
 
 [[package]]
@@ -876,9 +864,9 @@ dependencies = [
 
 [[package]]
 name = "proc-macro-crate"
-version = "1.1.0"
+version = "1.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1ebace6889caf889b4d3f76becee12e90353f2b8c7d875534a71e5742f8f6f83"
+checksum = "e17d47ce914bf4de440332250b0edd23ce48c005f59fab39d3335866b114f11a"
 dependencies = [
  "thiserror",
  "toml",
@@ -920,14 +908,13 @@ dependencies = [
 
 [[package]]
 name = "rand"
-version = "0.8.4"
+version = "0.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2e7573632e6454cf6b99d7aac4ccca54be06da05aca2ef7423d22d27d4d4bcd8"
+checksum = "34af8d1a0e25924bc5b7c43c079c942339d8f0a8b57c39049bef581b46327404"
 dependencies = [
  "libc",
  "rand_chacha",
  "rand_core",
- "rand_hc",
 ]
 
 [[package]]
@@ -950,18 +937,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "rand_hc"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d51e9f596de227fda2ea6c84607f5558e196eeaf43c986b724ba4fb8fdf497e7"
-dependencies = [
- "rand_core",
-]
-
-[[package]]
 name = "redbpf-macros"
 version = "2.3.0"
-source = "git+https://github.com/foniod/redbpf/?rev=71d1e7dbe495013e89403b4bff7c01fd4f7fda48#71d1e7dbe495013e89403b4bff7c01fd4f7fda48"
+source = "git+https://github.com/foniod/redbpf/?rev=af115e7070228f8cf00f6548d8f0c85eedb8a6bf#af115e7070228f8cf00f6548d8f0c85eedb8a6bf"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -973,7 +951,7 @@ dependencies = [
 [[package]]
 name = "redbpf-probes"
 version = "2.3.0"
-source = "git+https://github.com/foniod/redbpf/?rev=71d1e7dbe495013e89403b4bff7c01fd4f7fda48#71d1e7dbe495013e89403b4bff7c01fd4f7fda48"
+source = "git+https://github.com/foniod/redbpf/?rev=af115e7070228f8cf00f6548d8f0c85eedb8a6bf#af115e7070228f8cf00f6548d8f0c85eedb8a6bf"
 dependencies = [
  "anyhow",
  "bindgen",
@@ -981,6 +959,7 @@ dependencies = [
  "cargo-bpf",
  "cty",
  "glob",
+ "libbpf-sys",
  "quote",
  "redbpf-macros",
  "syn",
@@ -997,9 +976,9 @@ checksum = "41cc0f7e4d5d4544e8861606a285bb08d3e70712ccc7d2b84d7c0ccfaf4b05ce"
 
 [[package]]
 name = "redox_syscall"
-version = "0.2.10"
+version = "0.2.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8383f39639269cde97d255a32bdb68c047337295414940c68bdd30c2e13203ff"
+checksum = "8380fe0152551244f0747b1bf41737e0f8a74f97a14ccefd1148187271634f3c"
 dependencies = [
  "bitflags",
 ]
@@ -1060,7 +1039,7 @@ version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bfa0f585226d2e68097d4f95d113b15b83a82e819ab25717ec0590d9584ef366"
 dependencies = [
- "semver 1.0.5",
+ "semver 1.0.6",
 ]
 
 [[package]]
@@ -1112,9 +1091,9 @@ dependencies = [
 
 [[package]]
 name = "semver"
-version = "1.0.5"
+version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0486718e92ec9a68fbed73bb5ef687d71103b142595b406835649bebd33f72c7"
+checksum = "a4a3381e03edd24287172047536f20cabde766e2cd3e65e6b00fb3af51c4f38d"
 
 [[package]]
 name = "semver-parser"
@@ -1147,9 +1126,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.78"
+version = "1.0.79"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d23c1ba4cf0efd44be32017709280b32d1cea5c3f1275c3b6d9e8bc54f758085"
+checksum = "8e8d9fa5c3b304765ce1fd9c4c8a3de2c8db365a5b91be52f186efc675681d95"
 dependencies = [
  "itoa",
  "ryu",
@@ -1210,13 +1189,14 @@ dependencies = [
 
 [[package]]
 name = "strum_macros"
-version = "0.21.1"
+version = "0.23.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d06aaeeee809dbc59eb4556183dd927df67db1540de5be8d3ec0b6636358a5ec"
+checksum = "5bb0dc7ee9c15cea6199cde9a127fa16a4c5819af85395457ad72d68edc85a38"
 dependencies = [
  "heck",
  "proc-macro2",
  "quote",
+ "rustversion",
  "syn",
 ]
 
@@ -1250,7 +1230,7 @@ dependencies = [
  "cfg-if 1.0.0",
  "fastrand",
  "libc",
- "redox_syscall 0.2.10",
+ "redox_syscall 0.2.11",
  "remove_dir_all",
  "winapi 0.3.9",
 ]
@@ -1310,9 +1290,9 @@ dependencies = [
 
 [[package]]
 name = "tracing"
-version = "0.1.30"
+version = "0.1.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d8d93354fe2a8e50d5953f5ae2e47a3fc2ef03292e7ea46e3cc38f549525fb9"
+checksum = "f6c650a8ef0cd2dd93736f033d21cbd1224c5a967aa0c258d00fcf7dafef9b9f"
 dependencies = [
  "cfg-if 1.0.0",
  "pin-project-lite",
@@ -1622,7 +1602,7 @@ dependencies = [
  "core_affinity",
  "flume",
  "libbpf-rs",
- "nix 0.23.1",
+ "nix",
  "pnet",
  "protocol",
  "sudo",
@@ -1631,8 +1611,7 @@ dependencies = [
 
 [[package]]
 name = "xsk-rs"
-version = "0.3.0"
-source = "git+https://github.com/FelixMcFelix/xsk-rs/?branch=mut-access#13a2fb5b3ba55c4693b5ae4b0584efc31c090e87"
+version = "0.4.0"
 dependencies = [
  "bitflags",
  "cfg-if 1.0.0",
