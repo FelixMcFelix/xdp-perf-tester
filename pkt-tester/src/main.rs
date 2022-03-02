@@ -52,8 +52,10 @@ fn main() -> AnyRes<()> {
 	// let prog = EbpfProg::CKern;
 	let prog = EbpfProg::RustKern {
 		n_cores: Some(4),
-		n_ops: Some(200),
-		tx_chance: Some(0.8),
+		//n_cores: Some(1),
+		//n_ops: Some(200),
+		n_ops: Some(0),
+		tx_chance: Some(0.5),
 		user_ops: Some(0),
 	};
 
@@ -62,19 +64,20 @@ fn main() -> AnyRes<()> {
 		zero_copy: true,
 	};
 
-	let _ = wipe_target();
+	//let _ = wipe_target();
 
 	std::thread::sleep(Duration::from_millis(20));
 
-	let tgt_mac = get_target_mac()?;
+	//let tgt_mac = get_target_mac()?;
+    let tgt_mac = [0x3C, 0xFD, 0xFE, 0x9E, 0xA3, 0x20];
 
 	std::thread::sleep(Duration::from_millis(20));
 
-	setup_target(prog, xsk_cfg)?;
+	//setup_target(prog, xsk_cfg)?;
 
-	std::thread::sleep(Duration::from_secs(1));
+	//std::thread::sleep(Duration::from_secs(1));
 
-	time_pkts(channel, mac.octets(), tgt_mac, 1500);
+	time_pkts(channel, mac.octets(), tgt_mac, 64);
 
 	//wipe_target();
 
@@ -85,7 +88,7 @@ fn time_pkts(chan: Channel, src_mac: [u8; 6], dst_mac: [u8; 6], pkt_size: usize)
 	// let dst_mac = [0xbb,0xbb,0xbb,0xbb,0xbb,0xbb];
 	// let dst_mac = [0xff, 0xff, 0xff, 0xff, 0xff, 0xff];
 	// let dst_mac = [0x3c, 0xfd, 0xfe, 0x9e, 0xa3, 0x20];
-	let n_pkts = 100_000;
+	let n_pkts = 1_000_000;
 
 	let (mut pkt_tx, mut pkt_rx) = match chan {
 		Channel::Ethernet(tx, rx) => (tx, rx),
@@ -176,7 +179,8 @@ fn time_pkts(chan: Channel, src_mac: [u8; 6], dst_mac: [u8; 6], pkt_size: usize)
 			// 	println!("{} times", good_rxd);
 			// }
 
-			if good_rxd >= n_pkts - 500 {
+			//if good_rxd >= n_pkts - 500 {
+			if good_rxd == n_pkts {
 				break;
 			}
 		}
@@ -189,12 +193,14 @@ fn time_pkts(chan: Channel, src_mac: [u8; 6], dst_mac: [u8; 6], pkt_size: usize)
 
 	let mut kern_ts = vec![];
 	let mut user_ts = vec![];
+    let mut losses = 0;
 
 	for (i, (t1, maybe_dat)) in ts1.iter().zip(ts2.iter()).enumerate() {
 		let (xdp_only, t2) = match maybe_dat {
 			Some(a) => a,
 			_ => {
-				println!("Missing TS for pkt {}", i);
+				//println!("Missing TS for pkt {}", i);
+                losses += 1;
 				continue;
 			},
 		};
@@ -211,6 +217,7 @@ fn time_pkts(chan: Channel, src_mac: [u8; 6], dst_mac: [u8; 6], pkt_size: usize)
 
 	println!("Kmed: {:?}", stats::median(kern_ts.clone().drain(..)));
 	println!("Umed: {:?}", stats::median(user_ts.clone().drain(..)));
+    println!("Losses: {}", losses);
 }
 
 fn build_pkt(buf: &mut [u8], payload_len: usize, src_mac: [u8; 6], dst_mac: [u8; 6]) -> usize {
