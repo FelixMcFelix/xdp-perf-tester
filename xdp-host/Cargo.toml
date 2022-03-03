@@ -16,4 +16,4 @@ nix = "0.23"
 pnet = "0.29"
 protocol = { path = "../protocol" }
 sudo = "0.6"
-xsk-rs = { path = "../../xsk-rs/" }
+xsk-rs = { git = "https://github.com/felixmcfelix/xsk-rs", branch = "new-lbpf" }

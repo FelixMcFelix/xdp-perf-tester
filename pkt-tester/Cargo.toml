@@ -16,8 +16,14 @@ serde_json = "1"
 streaming-stats = "0.2"
 tungstenite = "0.16"
 
+[dependencies.xsk-rs]
+optional = true
+git = "https://github.com/felixmcfelix/xsk-rs"
+branch = "new-lbpf"
+
 [features]
 "netmap" = ["pnet/netmap"]
+"xdp" = ["xsk-rs"]
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["std"] }

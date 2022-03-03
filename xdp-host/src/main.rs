@@ -181,7 +181,7 @@ fn get_mac() -> Result<[u8; 6], Box<dyn Error>> {
 
 fn run_ebpf(
 	req: EbpfProg,
-    xsk_cfg: XskConfig,
+	xsk_cfg: XskConfig,
 	kill_rx: Receiver<()>,
 	live_tx: Sender<()>,
 	first_time: bool,
@@ -197,23 +197,23 @@ fn run_ebpf(
 
 	skt_cfg.libbpf_flags(LibbpfFlags::XSK_LIBBPF_FLAGS_INHIBIT_PROG_LOAD);
 
-    if xsk_cfg.zero_copy {
-        print!("Zero-copy ");
-        skt_cfg.bind_flags(xsk_rs::config::BindFlags::XDP_ZEROCOPY);
-    } else {
-        print!("Force copy ");
-        skt_cfg.bind_flags(xsk_rs::config::BindFlags::XDP_COPY);
-    }
+	if xsk_cfg.zero_copy {
+		print!("Zero-copy ");
+		skt_cfg.bind_flags(xsk_rs::config::BindFlags::XDP_ZEROCOPY);
+	} else {
+		print!("Force copy ");
+		skt_cfg.bind_flags(xsk_rs::config::BindFlags::XDP_COPY);
+	}
 
-    if xsk_cfg.skb_mode {
-        println!("SKB mode.");
-        skt_cfg.xdp_flags(xsk_rs::config::XdpFlags::XDP_FLAGS_SKB_MODE);
-    } else {
-        println!("DRV mode.");
-        skt_cfg.xdp_flags(xsk_rs::config::XdpFlags::XDP_FLAGS_DRV_MODE);
-    }
+	if xsk_cfg.skb_mode {
+		println!("SKB mode.");
+		skt_cfg.xdp_flags(xsk_rs::config::XdpFlags::XDP_FLAGS_SKB_MODE);
+	} else {
+		println!("DRV mode.");
+		skt_cfg.xdp_flags(xsk_rs::config::XdpFlags::XDP_FLAGS_DRV_MODE);
+	}
 
-    let skt_cfg = skt_cfg.build();
+	let skt_cfg = skt_cfg.build();
 
 	let prog_details = build_ebpf(&req).unwrap();
 
@@ -226,7 +226,7 @@ fn run_ebpf(
 	let mut sockets: Vec<(TxQueue, RxQueue)> = (0..prog_details.n_sks)
 		.map(|_| {
 			let (tx_q, rx_q, maybe_fq_and_cq) =
-				Socket::new(skt_cfg, &umem, &IFACE.parse().unwrap(), 2)//0)
+				Socket::new(skt_cfg, &umem, &IFACE.parse().unwrap(), 2) //0)
 					.expect("failed to create dev2 socket");
 
 			if maybe_fq_and_cq.is_some() {

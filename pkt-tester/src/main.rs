@@ -10,12 +10,25 @@ use pnet::{
 	},
 };
 use protocol::messages::*;
+#[cfg(feature = "xdp")]
+use std::{cell::UnsafeCell, collections::VecDeque, sync::Arc};
 use std::{
 	error::Error,
 	io::{Read, Write},
 	time::{Duration, Instant},
 };
 use tungstenite::{error::Error as WsError, WebSocket};
+#[cfg(feature = "xdp")]
+use xsk_rs::{
+	config::{LibbpfFlags, SocketConfig, UmemConfig},
+	socket::Socket,
+	umem::Umem,
+	CompQueue,
+	FillQueue,
+	FrameDesc,
+	RxQueue,
+	TxQueue,
+};
 
 type AnyRes<A> = Result<A, Box<dyn Error>>;
 
@@ -23,31 +36,16 @@ pub const ETH_HEADER_LEN: usize = 14;
 pub const IPV4_HEADER_LEN: usize = 20;
 pub const UDP_HEADER_LEN: usize = 8;
 
+pub const PKT_SIZE: usize = 64;
+pub const NB_PKTS: usize = 1_000_000;
+pub const UMEM_SZ: usize = 4096;
+
 fn main() -> AnyRes<()> {
 	let interfaces = pnet::datalink::interfaces();
 
 	// let iface: Option<&str> = None;
 	//let iface = Some("\\Device\\NPF_{A9F99251-A118-4386-B7A3-0A0604ACC11C}");
 	let iface = Some("enp1s0f0");
-	let iface = iface.and_then(|name| {
-		interfaces
-			.iter()
-			.find_map(|el| if el.name == name { Some(el) } else { None })
-	});
-
-	for iface in interfaces.iter() {
-		println!("IFACE: {:?}", iface);
-	}
-
-	if iface.is_none() {
-		return Ok(());
-	}
-
-	let iface = iface.unwrap();
-	let mac = iface.mac.unwrap();
-	let mut config = DlConfig::default();
-	config.read_timeout = Some(Duration::from_secs(10));
-	let channel = pnet::datalink::channel(iface, config).unwrap();
 
 	// let prog = EbpfProg::CKern;
 	let prog = EbpfProg::RustKern {
@@ -69,7 +67,7 @@ fn main() -> AnyRes<()> {
 	std::thread::sleep(Duration::from_millis(20));
 
 	//let tgt_mac = get_target_mac()?;
-    let tgt_mac = [0x3C, 0xFD, 0xFE, 0x9E, 0xA3, 0x20];
+	let tgt_mac = [0x3C, 0xFD, 0xFE, 0x9E, 0xA3, 0x20];
 
 	std::thread::sleep(Duration::from_millis(20));
 
@@ -77,19 +75,75 @@ fn main() -> AnyRes<()> {
 
 	//std::thread::sleep(Duration::from_secs(1));
 
-	time_pkts(channel, mac.octets(), tgt_mac, 64);
+	if !cfg!(feature = "xdp") {
+		let iface = iface.and_then(|name| {
+			interfaces
+				.iter()
+				.find_map(|el| if el.name == name { Some(el) } else { None })
+		});
+
+		for iface in interfaces.iter() {
+			println!("IFACE: {:?}", iface);
+		}
+
+		if iface.is_none() {
+			return Ok(());
+		}
+
+		let iface = iface.unwrap();
+		let mac = iface.mac.unwrap();
+		let mut config = DlConfig::default();
+		config.read_timeout = Some(Duration::from_secs(10));
+		let channel = pnet::datalink::channel(iface, config).unwrap();
+
+		time_pkts(channel, mac.octets(), tgt_mac, PKT_SIZE, NB_PKTS);
+	} else {
+		#[cfg(feature = "xdp")]
+		{
+			//assumption: n_rx qs == n_cores
+			let handlers = std::thread::available_parallelism()?.get();
+			let mut skt_cfg = SocketConfig::builder().build();
+
+			let mut sockets: Vec<(
+				usize,
+				Umem,
+				Vec<FrameDesc>,
+				TxQueue,
+				RxQueue,
+				FillQueue,
+				CompQueue,
+			)> = (0..handlers)
+				.map(|i| {
+					let (umem, descs) =
+						Umem::new(UmemConfig::default(), UMEM_SZ.try_into().unwrap(), false)
+							.expect("failed to create UMEM");
+
+					let (tx_q, rx_q, maybe_fq_and_cq) =
+						Socket::new(skt_cfg, &umem, &IFACE.parse().unwrap(), i)
+							.expect("failed to create dev2 socket");
+
+					let (fq, cq) =
+						maybe_fq_and_cq.expect(format!("Failed to fet FQ and CQ for Queue {}."));
+
+					// half for send, half for rx...
+					unsafe {
+						fq.produce(&descs[UMEM_SZ / 2..]);
+					}
+
+					(i, umem, descs, tx_q, rx_q, fq, cq)
+				})
+				.collect();
+
+			time_pkts_xdp(sockets, src_mac, dst_mac, PKT_SIZE, NB_PKTS);
+		}
+	}
 
 	//wipe_target();
 
 	Ok(())
 }
 
-fn time_pkts(chan: Channel, src_mac: [u8; 6], dst_mac: [u8; 6], pkt_size: usize) {
-	// let dst_mac = [0xbb,0xbb,0xbb,0xbb,0xbb,0xbb];
-	// let dst_mac = [0xff, 0xff, 0xff, 0xff, 0xff, 0xff];
-	// let dst_mac = [0x3c, 0xfd, 0xfe, 0x9e, 0xa3, 0x20];
-	let n_pkts = 1_000_000;
-
+fn time_pkts(chan: Channel, src_mac: [u8; 6], dst_mac: [u8; 6], pkt_size: usize, n_pkts: usize) {
 	let (mut pkt_tx, mut pkt_rx) = match chan {
 		Channel::Ethernet(tx, rx) => (tx, rx),
 		_ => unimplemented!(),
@@ -131,39 +185,12 @@ fn time_pkts(chan: Channel, src_mac: [u8; 6], dst_mac: [u8; 6], pkt_size: usize)
 
 		while let Ok(bytes) = pkt_rx.next() {
 			let t = Instant::now();
-			let eth_pkt = EthernetPacket::new(bytes).expect("Plenty of room...");
 
-			if eth_pkt.get_ethertype() != EtherTypes::Ipv4 {
+			let (pkt_id, skipped_user) = if let Some(a) = check_pkt(bytes) {
+				a
+			} else {
 				continue;
-			}
-
-			let src = eth_pkt.get_source().octets();
-			let dst = eth_pkt.get_destination().octets();
-
-			// mac swap required on seen pkts
-			if !(src == dst_mac && dst == src_mac) {
-				continue;
-			}
-
-			// println!("SRC {:x?} vs {src_mac:x?} -- {} {}", src, src==src_mac, src==dst_mac);
-			// println!("DST {:x?} vs {dst_mac:x?} -- {} {}", dst, dst==src_mac, dst==dst_mac);
-			// println!("tx in xdp? {skipped_user}",);
-
-			let ipv4_pkt = Ipv4Packet::new(eth_pkt.payload()).expect("Plenty of room...");
-
-			if ipv4_pkt.get_next_level_protocol() != IpNextHeaderProtocols::Udp {
-				continue;
-			}
-
-			let skipped_user = ipv4_pkt.get_ttl() == 64;
-
-			let udp_pkt = UdpPacket::new(ipv4_pkt.payload()).expect("roomy...");
-
-			if !(udp_pkt.get_source() == 3000 && udp_pkt.get_destination() == 3000) {
-				continue;
-			}
-
-			let pkt_id = u64::from_be_bytes((&udp_pkt.payload()[..8]).try_into().unwrap());
+			};
 
 			let empty = space[pkt_id as usize].is_none();
 
@@ -193,14 +220,14 @@ fn time_pkts(chan: Channel, src_mac: [u8; 6], dst_mac: [u8; 6], pkt_size: usize)
 
 	let mut kern_ts = vec![];
 	let mut user_ts = vec![];
-    let mut losses = 0;
+	let mut losses = 0;
 
 	for (i, (t1, maybe_dat)) in ts1.iter().zip(ts2.iter()).enumerate() {
 		let (xdp_only, t2) = match maybe_dat {
 			Some(a) => a,
 			_ => {
 				//println!("Missing TS for pkt {}", i);
-                losses += 1;
+				losses += 1;
 				continue;
 			},
 		};
@@ -217,9 +244,192 @@ fn time_pkts(chan: Channel, src_mac: [u8; 6], dst_mac: [u8; 6], pkt_size: usize)
 
 	println!("Kmed: {:?}", stats::median(kern_ts.clone().drain(..)));
 	println!("Umed: {:?}", stats::median(user_ts.clone().drain(..)));
-    println!("Losses: {}", losses);
+	println!("Losses: {}", losses);
 }
 
+#[cfg(feature = "xdp")]
+fn time_pkts_xdp(
+	sockets: Vec<(
+		usize,
+		Umem,
+		Vec<FrameDesc>,
+		TxQueue,
+		RxQueue,
+		FillQueue,
+		CompQueue,
+	)>,
+	src_mac: [u8; 6],
+	dst_mac: [u8; 6],
+	pkt_size: usize,
+	n_pkts: usize,
+) {
+	// need: shared store. for all threads.
+	let mut space: Vec<UnsafeCell<Option<(bool, Instant)>>> = vec![];
+	space.resize_with(n_pkts, || UnsafeCell::new(None));
+	let sharespace = Arc::new(space);
+
+	let mut hs = vec![];
+	let n_senders = sockets.len();
+
+	for (i, umem, descs, tx_q, rx_q, fq, cq) in sockets {
+		let my_space = sharespace.clone();
+		let h = std::thread::spawn(move || {
+			// loop:
+			// try rx. take time.
+			//  for each, insert timestamp in correct loc.
+			// send a batch of pkts w/ same send_ts
+			// drain cq: maintain own sendlist and keep len in kernel correct.
+			// prioritise giving frames to kernel.
+			// 10s since spawn? break!
+
+			const SEND_BATCH: usize = 1;
+
+			let mut pkts_in_kern = UMEM_SZ / 2;
+			let mut rx_desc_scratch = descs.clone().truncate(UMEM_SZ / 2);
+			// let mut tx_descs = VecDeque::from(descs);
+			let mut tx_descs = descs.truncate(UMEM_SZ / 2);
+			let mut last_evt = Instant::now();
+
+			// how to manage tx-descs?
+			// send from back
+			// fill to back?
+			let mut tx_descs_len = tx_descs.len();
+
+			let per_sender = n_pkts / n_senders;
+			let mut ids = (i * per_sender)..(if i == (n_senders - 1) {
+				n_pkts
+			} else {
+				(i + 1) * per_sender
+			});
+
+			let mut pkt_buf = [0u8; 1560];
+			let payload_len = pkt_size - 42;
+			let len = build_pkt(&mut pkt_buf[..], payload_len, src_mac, dst_mac);
+
+			// pre-prep all pkts with most of the data they need.
+			// we can probably expect that the kernel will return these frames
+			// intact, allowing decent reuse.
+			for desc in &mut tx_descs[..] {
+				let mut data = unsafe { umem.data_mut(desc) };
+				let mut cursor = data.cursor();
+
+				cursor
+					.write_all(&pkt_buf[..len])
+					.expect("Trivially enough space for this...");
+			}
+
+			let mut send_times = Vec::with_capacity(ids.end - ids.start);
+
+			loop {
+				let mut evt = false;
+				let pkts_recvd = unsafe { rx.poll_and_consume(&mut rx_desc_scratch, 1).unwrap() };
+				let t = Instant::now();
+				for recv_desc in rx_desc_scratch.iter().take(pkts_recvd) {
+					let data = unsafe { umem.data(recv_desc) };
+					let body = data.contents();
+
+					// chk packet.
+					// put time into right slot.
+					if let Some((id, skipped_user)) = check_pkt(body) {
+						let val_ptr = &sharespace[id].get();
+						let val_space = unsafe { val_ptr as &mut Option<(bool, Instant)> };
+						*val_space = Some((skipped_user, t))
+					}
+
+					evt = true;
+				}
+
+				// pass back read frames to kern
+				unsafe {
+					fq.produce(&rx_desc_scratch[..pkts_recvd]);
+				}
+
+				// prep and send packets
+				if tx_descs_len != 0 && !ids.is_empty() {
+					let pkts_to_send = SEND_BATCH.min(tx_descs_len).min(ids.end - ids.start);
+					let pkt_range = (tx_descs_len - pkts_to_send)..tx_descs_len;
+
+					// actual prep over pkt_range.
+					for desc in &mut tx_descs[pkt_range] {
+						let mut data = unsafe { umem.data_mut(desc) };
+						let mut body = data.contents_mut();
+						modify_pkt(body, ids.start);
+						ids.start += 1;
+					}
+
+					unsafe { tx.produce_and_wakeup(&tx_descs[pkt_range]).unwrap() };
+					let send_time = Instant::now();
+
+					for i in 0..pkts_to_send {
+						send_times.push(send_time);
+					}
+
+					tx_descs_len -= pkts_to_send;
+					evt = true;
+				}
+
+				// get sent frames back.
+				// if tx_descs_len != tx_descs.len() {
+				tx_descs_len += unsafe { cq.consume(&mut descs[tx_descs_len..]) };
+				// }
+
+				if evt {
+					last_evt = Instant::now();
+				}
+
+				if last_evt.elapsed() > Duration::from_secs(10) {
+					break;
+				}
+			}
+
+			send_times
+		});
+
+		hs.push(h);
+	}
+
+	// await all.
+	// stack end_time vecs together.
+	let all_sends = vec![];
+	for handle in hs.drain(..) {
+		let times = hs.join().expect("Thread panicked!");
+		all_sends.append(times);
+	}
+
+	let mut kern_ts = vec![];
+	let mut user_ts = vec![];
+	let mut losses = 0;
+
+	for (i, (t1, maybe_dat)) in all_sends.iter().zip(sharespace.iter()).enumerate() {
+		let val_ptr = maybe_dat.get();
+		let val_space = unsafe { val_ptr as &Option<(bool, Instant)> };
+
+		let maybe_dat = val_space.as_ref();
+		let (xdp_only, t2) = match maybe_dat {
+			Some(a) => a,
+			_ => {
+				//println!("Missing TS for pkt {}", i);
+				losses += 1;
+				continue;
+			},
+		};
+		let dt = (*t2 - *t1).as_nanos();
+		if *xdp_only {
+			kern_ts.push(dt);
+		} else {
+			user_ts.push(dt);
+		}
+	}
+
+	// println!("K: {:?}", kern_ts);
+	// println!("U: {:?}", user_ts);
+
+	println!("Kmed: {:?}", stats::median(kern_ts.clone().drain(..)));
+	println!("Umed: {:?}", stats::median(user_ts.clone().drain(..)));
+	println!("Losses: {}", losses);
+}
+
+#[inline]
 fn build_pkt(buf: &mut [u8], payload_len: usize, src_mac: [u8; 6], dst_mac: [u8; 6]) -> usize {
 	// sort of have to build from scratch if we want to write
 	// straight over the NIC.
@@ -261,6 +471,7 @@ fn build_pkt(buf: &mut [u8], payload_len: usize, src_mac: [u8; 6], dst_mac: [u8;
 	ETH_HEADER_LEN + IPV4_HEADER_LEN + UDP_HEADER_LEN + payload_len
 }
 
+#[inline]
 fn modify_pkt(buf: &mut [u8], pkt_idx: u64) {
 	let mut ipv4_pkt =
 		MutableIpv4Packet::new(&mut buf[ETH_HEADER_LEN..]).expect("Plenty of room...");
@@ -275,6 +486,45 @@ fn modify_pkt(buf: &mut [u8], pkt_idx: u64) {
 
 	(&mut udp_pkt.payload_mut()[..std::mem::size_of::<u64>()])
 		.copy_from_slice(&pkt_idx.to_be_bytes());
+}
+
+#[inline]
+fn check_pkt(buf: &[u8]) -> Option<(usize, bool)> {
+	let eth_pkt = EthernetPacket::new(bytes).ok()?;
+
+	if eth_pkt.get_ethertype() != EtherTypes::Ipv4 {
+		return None;
+	}
+
+	let src = eth_pkt.get_source().octets();
+	let dst = eth_pkt.get_destination().octets();
+
+	// mac swap required on seen pkts
+	if !(src == dst_mac && dst == src_mac) {
+		return None;
+	}
+
+	// println!("SRC {:x?} vs {src_mac:x?} -- {} {}", src, src==src_mac, src==dst_mac);
+	// println!("DST {:x?} vs {dst_mac:x?} -- {} {}", dst, dst==src_mac, dst==dst_mac);
+	// println!("tx in xdp? {skipped_user}",);
+
+	let ipv4_pkt = Ipv4Packet::new(eth_pkt.payload()).ok()?;
+
+	if ipv4_pkt.get_next_level_protocol() != IpNextHeaderProtocols::Udp {
+		return None;
+	}
+
+	let skipped_user = ipv4_pkt.get_ttl() == 64;
+
+	let udp_pkt = UdpPacket::new(ipv4_pkt.payload()).ok()?;
+
+	if !(udp_pkt.get_source() == 3000 && udp_pkt.get_destination() == 3000) {
+		return None;
+	}
+
+	let pkt_id = u64::from_be_bytes((&udp_pkt.payload()[..8]).try_into().unwrap());
+
+	Some((pkt_id, skipped_user))
 }
 
 fn setup_target(prog: EbpfProg, cfg: XskConfig) -> AnyRes<()> {
