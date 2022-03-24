@@ -585,6 +585,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "netmap_sys"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4595346337e5a357f0322669f45d7f5f75f9c8636061c66edb72e1064597fc71"
+dependencies = [
+ "cc",
+ "libc",
+]
+
+[[package]]
 name = "nix"
 version = "0.23.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -749,6 +759,7 @@ dependencies = [
  "streaming-stats",
  "tungstenite",
  "winapi 0.3.9",
+ "xsk-rs",
 ]
 
 [[package]]
@@ -785,6 +796,7 @@ checksum = "6f85aef5e52e22ff06b1b11f2eb6d52959a9e0ecad3cb3f5cc2d78cadc077f0e"
 dependencies = [
  "ipnetwork",
  "libc",
+ "netmap_sys",
  "pnet_base",
  "pnet_sys",
  "winapi 0.3.9",
@@ -1612,6 +1624,7 @@ dependencies = [
 [[package]]
 name = "xsk-rs"
 version = "0.4.0"
+source = "git+https://github.com/felixmcfelix/xsk-rs?branch=new-lbpf#3eb9d3cb408f88c06debf78b85b86e200d075daf"
 dependencies = [
  "bitflags",
  "cfg-if 1.0.0",

@@ -45,12 +45,12 @@ fn main() -> AnyRes<()> {
 
 	// let iface: Option<&str> = None;
 	//let iface = Some("\\Device\\NPF_{A9F99251-A118-4386-B7A3-0A0604ACC11C}");
-	let iface = Some("enp1s0f0");
+	let iface_name = Some("enp1s0f0");
 
 	// let prog = EbpfProg::CKern;
 	let prog = EbpfProg::RustKern {
-		n_cores: Some(4),
-		//n_cores: Some(1),
+		//n_cores: Some(4),
+		n_cores: Some(1),
 		//n_ops: Some(200),
 		n_ops: Some(0),
 		tx_chance: Some(0.5),
@@ -59,7 +59,9 @@ fn main() -> AnyRes<()> {
 
 	let xsk_cfg = XskConfig {
 		skb_mode: false,
+		//skb_mode: true,
 		zero_copy: true,
+		//zero_copy: false,
 	};
 
 	//let _ = wipe_target();
@@ -71,38 +73,46 @@ fn main() -> AnyRes<()> {
 
 	std::thread::sleep(Duration::from_millis(20));
 
-	//setup_target(prog, xsk_cfg)?;
+	setup_target(prog, xsk_cfg)?;
+
+	// KILL HERE IF USING PKTGEN
+	// return Ok(());
 
 	//std::thread::sleep(Duration::from_secs(1));
 
+	let iface = iface_name.clone().and_then(|name| {
+		interfaces
+			.iter()
+			.find_map(|el| if el.name == name { Some(el) } else { None })
+	});
+
+	for iface in interfaces.iter() {
+		println!("IFACE: {:?}", iface);
+	}
+
+	if iface.is_none() {
+		return Ok(());
+	}
+
+	let iface = iface.unwrap();
+	let mac = iface.mac.unwrap();
 	if !cfg!(feature = "xdp") {
-		let iface = iface.and_then(|name| {
-			interfaces
-				.iter()
-				.find_map(|el| if el.name == name { Some(el) } else { None })
-		});
-
-		for iface in interfaces.iter() {
-			println!("IFACE: {:?}", iface);
-		}
-
-		if iface.is_none() {
-			return Ok(());
-		}
-
-		let iface = iface.unwrap();
-		let mac = iface.mac.unwrap();
 		let mut config = DlConfig::default();
 		config.read_timeout = Some(Duration::from_secs(10));
 		let channel = pnet::datalink::channel(iface, config).unwrap();
 
 		time_pkts(channel, mac.octets(), tgt_mac, PKT_SIZE, NB_PKTS);
 	} else {
+		drop(iface);
 		#[cfg(feature = "xdp")]
 		{
+			let iface_name = iface_name.unwrap();
 			//assumption: n_rx qs == n_cores
 			let handlers = std::thread::available_parallelism()?.get();
-			let mut skt_cfg = SocketConfig::builder().build();
+			let mut skt_cfg = SocketConfig::builder()
+                //.libbpf_flags(xsk_rs::config::LibbpfFlags::XSK_LIBBPF_FLAGS_INHIBIT_PROG_LOAD)
+                //.xdp_flags(xsk_rs::config::XdpFlags::XDP_FLAGS_UPDATE_IF_NOEXIST)
+                .build();
 
 			let mut sockets: Vec<(
 				usize,
@@ -114,27 +124,31 @@ fn main() -> AnyRes<()> {
 				CompQueue,
 			)> = (0..handlers)
 				.map(|i| {
-					let (umem, descs) =
-						Umem::new(UmemConfig::default(), UMEM_SZ.try_into().unwrap(), false)
-							.expect("failed to create UMEM");
+					println!("Go {i}");
+					let (umem, descs) = Umem::new(
+						UmemConfig::default(),
+						(UMEM_SZ as u32).try_into().unwrap(),
+						false,
+					)
+					.expect("failed to create UMEM");
 
 					let (tx_q, rx_q, maybe_fq_and_cq) =
-						Socket::new(skt_cfg, &umem, &IFACE.parse().unwrap(), i)
+						Socket::new(skt_cfg, &umem, &iface_name.parse().unwrap(), i as u32)
 							.expect("failed to create dev2 socket");
 
-					let (fq, cq) =
-						maybe_fq_and_cq.expect(format!("Failed to fet FQ and CQ for Queue {}."));
+					let (mut fq, cq) =
+						maybe_fq_and_cq.expect(&format!("Failed to get FQ and CQ for Queue {i}."));
 
 					// half for send, half for rx...
 					unsafe {
-						fq.produce(&descs[UMEM_SZ / 2..]);
+						fq.produce(&descs[(UMEM_SZ / 2)..]);
 					}
 
 					(i, umem, descs, tx_q, rx_q, fq, cq)
 				})
 				.collect();
 
-			time_pkts_xdp(sockets, src_mac, dst_mac, PKT_SIZE, NB_PKTS);
+			time_pkts_xdp(sockets, mac.octets(), tgt_mac, PKT_SIZE, NB_PKTS);
 		}
 	}
 
@@ -186,7 +200,7 @@ fn time_pkts(chan: Channel, src_mac: [u8; 6], dst_mac: [u8; 6], pkt_size: usize,
 		while let Ok(bytes) = pkt_rx.next() {
 			let t = Instant::now();
 
-			let (pkt_id, skipped_user) = if let Some(a) = check_pkt(bytes) {
+			let (pkt_id, skipped_user) = if let Some(a) = check_pkt(bytes, &src_mac, &dst_mac) {
 				a
 			} else {
 				continue;
@@ -248,6 +262,12 @@ fn time_pkts(chan: Channel, src_mac: [u8; 6], dst_mac: [u8; 6], pkt_size: usize,
 }
 
 #[cfg(feature = "xdp")]
+struct Wrap<T>(T);
+
+#[cfg(feature = "xdp")]
+unsafe impl<T> Sync for Wrap<T> {}
+
+#[cfg(feature = "xdp")]
 fn time_pkts_xdp(
 	sockets: Vec<(
 		usize,
@@ -264,14 +284,14 @@ fn time_pkts_xdp(
 	n_pkts: usize,
 ) {
 	// need: shared store. for all threads.
-	let mut space: Vec<UnsafeCell<Option<(bool, Instant)>>> = vec![];
-	space.resize_with(n_pkts, || UnsafeCell::new(None));
+	let mut space: Vec<Wrap<UnsafeCell<Option<(bool, Instant)>>>> = vec![];
+	space.resize_with(n_pkts, || Wrap(UnsafeCell::new(None)));
 	let sharespace = Arc::new(space);
 
 	let mut hs = vec![];
 	let n_senders = sockets.len();
 
-	for (i, umem, descs, tx_q, rx_q, fq, cq) in sockets {
+	for (i, umem, mut descs, mut tx_q, mut rx_q, mut fq, mut cq) in sockets {
 		let my_space = sharespace.clone();
 		let h = std::thread::spawn(move || {
 			// loop:
@@ -285,9 +305,11 @@ fn time_pkts_xdp(
 			const SEND_BATCH: usize = 1;
 
 			let mut pkts_in_kern = UMEM_SZ / 2;
-			let mut rx_desc_scratch = descs.clone().truncate(UMEM_SZ / 2);
+			let mut rx_desc_scratch = descs.clone();
+			rx_desc_scratch.truncate(UMEM_SZ / 2);
 			// let mut tx_descs = VecDeque::from(descs);
-			let mut tx_descs = descs.truncate(UMEM_SZ / 2);
+			descs.truncate(UMEM_SZ / 2);
+			let mut tx_descs = descs;
 			let mut last_evt = Instant::now();
 
 			// how to manage tx-descs?
@@ -296,7 +318,7 @@ fn time_pkts_xdp(
 			let mut tx_descs_len = tx_descs.len();
 
 			let per_sender = n_pkts / n_senders;
-			let mut ids = (i * per_sender)..(if i == (n_senders - 1) {
+			let mut ids: std::ops::Range<usize> = (i * per_sender)..(if i == (n_senders - 1) {
 				n_pkts
 			} else {
 				(i + 1) * per_sender
@@ -316,13 +338,15 @@ fn time_pkts_xdp(
 				cursor
 					.write_all(&pkt_buf[..len])
 					.expect("Trivially enough space for this...");
+
+				println!("I have put in {}/{}", cursor.pos(), cursor.buf_len());
 			}
 
 			let mut send_times = Vec::with_capacity(ids.end - ids.start);
 
 			loop {
 				let mut evt = false;
-				let pkts_recvd = unsafe { rx.poll_and_consume(&mut rx_desc_scratch, 1).unwrap() };
+				let pkts_recvd = unsafe { rx_q.poll_and_consume(&mut rx_desc_scratch, 1).unwrap() };
 				let t = Instant::now();
 				for recv_desc in rx_desc_scratch.iter().take(pkts_recvd) {
 					let data = unsafe { umem.data(recv_desc) };
@@ -330,10 +354,11 @@ fn time_pkts_xdp(
 
 					// chk packet.
 					// put time into right slot.
-					if let Some((id, skipped_user)) = check_pkt(body) {
-						let val_ptr = &sharespace[id].get();
-						let val_space = unsafe { val_ptr as &mut Option<(bool, Instant)> };
-						*val_space = Some((skipped_user, t))
+					if let Some((id, skipped_user)) = check_pkt(body, &src_mac, &dst_mac) {
+						let val_ptr = &my_space[id as usize].0.get();
+						unsafe {
+							val_ptr.replace(Some((skipped_user, t)));
+						};
 					}
 
 					evt = true;
@@ -350,19 +375,21 @@ fn time_pkts_xdp(
 					let pkt_range = (tx_descs_len - pkts_to_send)..tx_descs_len;
 
 					// actual prep over pkt_range.
-					for desc in &mut tx_descs[pkt_range] {
+					for desc in &mut tx_descs[pkt_range.clone()] {
 						let mut data = unsafe { umem.data_mut(desc) };
 						let mut body = data.contents_mut();
-						modify_pkt(body, ids.start);
+						modify_pkt(body, ids.start as u64);
 						ids.start += 1;
 					}
 
-					unsafe { tx.produce_and_wakeup(&tx_descs[pkt_range]).unwrap() };
+					unsafe { tx_q.produce_and_wakeup(&tx_descs[pkt_range]).unwrap() };
 					let send_time = Instant::now();
 
 					for i in 0..pkts_to_send {
 						send_times.push(send_time);
 					}
+
+					//println!("Sent {pkts_to_send} pkts.");
 
 					tx_descs_len -= pkts_to_send;
 					evt = true;
@@ -370,7 +397,12 @@ fn time_pkts_xdp(
 
 				// get sent frames back.
 				// if tx_descs_len != tx_descs.len() {
-				tx_descs_len += unsafe { cq.consume(&mut descs[tx_descs_len..]) };
+				let rd = unsafe { cq.consume(&mut tx_descs[tx_descs_len..]) };
+				tx_descs_len += rd;
+
+				if i == 0 {
+					println!("Got {rd} back from CQ");
+				}
 				// }
 
 				if evt {
@@ -390,10 +422,10 @@ fn time_pkts_xdp(
 
 	// await all.
 	// stack end_time vecs together.
-	let all_sends = vec![];
+	let mut all_sends = vec![];
 	for handle in hs.drain(..) {
-		let times = hs.join().expect("Thread panicked!");
-		all_sends.append(times);
+		let mut times = handle.join().expect("Thread panicked!");
+		all_sends.append(&mut times);
 	}
 
 	let mut kern_ts = vec![];
@@ -401,8 +433,8 @@ fn time_pkts_xdp(
 	let mut losses = 0;
 
 	for (i, (t1, maybe_dat)) in all_sends.iter().zip(sharespace.iter()).enumerate() {
-		let val_ptr = maybe_dat.get();
-		let val_space = unsafe { val_ptr as &Option<(bool, Instant)> };
+		let val_ptr = maybe_dat.0.get();
+		let val_space = unsafe { &*val_ptr };
 
 		let maybe_dat = val_space.as_ref();
 		let (xdp_only, t2) = match maybe_dat {
@@ -489,8 +521,8 @@ fn modify_pkt(buf: &mut [u8], pkt_idx: u64) {
 }
 
 #[inline]
-fn check_pkt(buf: &[u8]) -> Option<(usize, bool)> {
-	let eth_pkt = EthernetPacket::new(bytes).ok()?;
+fn check_pkt(buf: &[u8], src_mac: &[u8; 6], dst_mac: &[u8; 6]) -> Option<(u64, bool)> {
+	let eth_pkt = EthernetPacket::new(buf)?;
 
 	if eth_pkt.get_ethertype() != EtherTypes::Ipv4 {
 		return None;
@@ -500,7 +532,7 @@ fn check_pkt(buf: &[u8]) -> Option<(usize, bool)> {
 	let dst = eth_pkt.get_destination().octets();
 
 	// mac swap required on seen pkts
-	if !(src == dst_mac && dst == src_mac) {
+	if !(src == *dst_mac && dst == *src_mac) {
 		return None;
 	}
 
@@ -508,7 +540,7 @@ fn check_pkt(buf: &[u8]) -> Option<(usize, bool)> {
 	// println!("DST {:x?} vs {dst_mac:x?} -- {} {}", dst, dst==src_mac, dst==dst_mac);
 	// println!("tx in xdp? {skipped_user}",);
 
-	let ipv4_pkt = Ipv4Packet::new(eth_pkt.payload()).ok()?;
+	let ipv4_pkt = Ipv4Packet::new(eth_pkt.payload())?;
 
 	if ipv4_pkt.get_next_level_protocol() != IpNextHeaderProtocols::Udp {
 		return None;
@@ -516,7 +548,7 @@ fn check_pkt(buf: &[u8]) -> Option<(usize, bool)> {
 
 	let skipped_user = ipv4_pkt.get_ttl() == 64;
 
-	let udp_pkt = UdpPacket::new(ipv4_pkt.payload()).ok()?;
+	let udp_pkt = UdpPacket::new(ipv4_pkt.payload())?;
 
 	if !(udp_pkt.get_source() == 3000 && udp_pkt.get_destination() == 3000) {
 		return None;
