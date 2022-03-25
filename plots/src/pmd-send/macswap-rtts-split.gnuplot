@@ -14,7 +14,7 @@ lm = 0.12
 rm = 0.95
 gap = 0.03
 size = 0.75
-y1 = 14.0; y2 = 31.0; y3 = 270.0; y4 = 420.0
+y1 = 17.0; y2 = 35.0; y3 = 350.0; y4 = 500.0
 
 topratio = 0.45
 botratio = 1.0 - topratio
@@ -72,7 +72,7 @@ set yrange [y1:y2]
 
 set key above
 
-plot for [i=0:2] file(i) u (x_coord(i)):($1/1.2e3):(1.0) every ::1 notitle ls LineStyles[i + 2]
+plot for [i=0:2] file(i) u (x_coord(i)):($1/1.0e3):(1.0) every ::1 notitle ls LineStyles[i + 2]
 
 unset xtics
 unset xlabel
@@ -95,6 +95,6 @@ lm + gap / 4.0, bm + size * botratio + gap / 4.0 + gap nohead lc rgb '#a0a0a0'
 
 unset ylabel
 
-plot for [i=3:3] file(i) u (x_coord(i)):($1/1.2e3):(1.0) every ::1 notitle ls LineStyles[i + 2]
+plot for [i=3:3] file(i) u (x_coord(i)):($1/1.0e3):(1.0) every ::1 notitle ls LineStyles[i + 2]
 
 unset multiplot

@@ -47,4 +47,4 @@ set for [i=0:2] xtics add (PNames[i + 1] x_coord(i))
 
 set key above
 
-plot for [i=0:2] file(i) u (x_coord(i)):($1/1.2e3):(1.0) every ::1 notitle ls LineStyles[i + 2]
+plot for [i=0:2] file(i) u (x_coord(i)):($1/1.0e3):(1.0) every ::1 notitle ls LineStyles[i + 2]
